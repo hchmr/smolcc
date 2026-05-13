@@ -2,13 +2,18 @@ OUT_DIR = out
 TARGET = $(OUT_DIR)/ucc
 SRCS = main.c
 OBJS = $(SRCS:%.c=$(OUT_DIR)/%.o)
-CFLAGS = -Wall -Wextra -Wpedantic -std=c99 -Wconversion
+CC = cc
+CFLAGS = -Wall -Wextra -Wpedantic -std=c99 \
+	-ffreestanding -fno-stack-protector -fno-builtin \
+	-Wno-strict-prototypes -Wno-logical-op-parentheses
+LDFLAGS = -nostdlib
+LDLIBS = -lSystem
 
 $(TARGET): $(OBJS)
-	$(CC) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(OUT_DIR)/%.o: %.c | $(OUT_DIR)
-	$(CC) -c -o $@ $<
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(OUT_DIR):
 	mkdir -p $@

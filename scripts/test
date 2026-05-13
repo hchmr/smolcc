@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+make && /usr/bin/time -l -h ./out/ucc main.c

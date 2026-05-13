@@ -1,29 +1,35 @@
 //============================================================================
 //= unistd
 
-int open(const char *pathname, int flags, int mode);
-int read(int fd, void *buf, int count);
-int write(int fd, const void *buf, int count);
-void _exit(int status);
+extern int open(const char *pathname, int flags, int mode);
+extern int read(int fd, void *buf, int count);
+extern int write(int fd, const void *buf, int count);
+extern void _exit(int status);
 
 //=============================================================================
 //= str
 
-int str_len(const char *s) {
+static int str_len(const char *s) {
     int len = 0;
     while (s[len])
         len++;
     return len;
 }
 
-int str_eq(const char *a, const char *b) {
+static int str_eq(const char *a, const char *b) {
     if (a == b)
         return 1;
-    while (*a && *b) {
+    while (*a && *b)
         if (*a++ != *b++)
             return 0;
-    }
     return *a == *b;
+}
+
+static const char *find_chr(const char *s, int c) {
+    while (*s)
+        if (c == *s++)
+            return s;
+    return 0;
 }
 
 //=============================================================================
@@ -31,11 +37,11 @@ int str_eq(const char *a, const char *b) {
 
 enum { EOF = -1 };
 
-void write_char(int fd, int c) {
+static void write_char(int fd, int c) {
     write(fd, &c, 1);
 }
 
-int read_char(int fd) {
+static int read_char(int fd) {
     char c;
     int n = read(fd, &c, 1);
     if (n <= 0)
@@ -43,13 +49,13 @@ int read_char(int fd) {
     return c;
 }
 
-void write_str(int fd, const char *s) {
+static void write_str(int fd, const char *s) {
     while (*s) {
         write_char(fd, *s++);
     }
 }
 
-void write_int(int fd, long n) {
+static void write_int(int fd, long n) {
     if (n < 0) {
         write_char(fd, '-');
         n = -n;
@@ -59,7 +65,7 @@ void write_int(int fd, long n) {
     write_char(fd, n % 10 + '0');
 }
 
-void write_hex(int fd, long n) {
+static void write_hex(int fd, long n) {
     if (n >= 16)
         write_hex(fd, n / 16);
     int digit = n % 16;
@@ -70,7 +76,7 @@ void write_hex(int fd, long n) {
 }
 
 // internal printf implementation supporting %d, %c, %s, and %x
-void write_f_(int fd, const char *fmt, const char **args) {
+static void write_f_(int fd, const char *fmt, const char **args) {
     while (*fmt) {
         if (*fmt == '%') {
             fmt++;
@@ -96,7 +102,7 @@ void write_f_(int fd, const char *fmt, const char **args) {
     }
 }
 
-void write_f4(int fd, const char *fmt, const void *x1, const void *x2, const void *x3, const void *x4) {
+static void write_f4(int fd, const char *fmt, const void *x1, const void *x2, const void *x3, const void *x4) {
     const char *args[4];
     args[0] = x1;
     args[1] = x2;
@@ -105,19 +111,19 @@ void write_f4(int fd, const char *fmt, const void *x1, const void *x2, const voi
     write_f_(fd, fmt, args);
 }
 
-void write_f3(int fd, const char *fmt, const void *x1, const void *x2, const void *x3) {
+static void write_f3(int fd, const char *fmt, const void *x1, const void *x2, const void *x3) {
     write_f4(fd, fmt, x1, x2, x3, 0);
 }
 
-void write_f2(int fd, const char *fmt, const void *x1, const void *x2) {
+static void write_f2(int fd, const char *fmt, const void *x1, const void *x2) {
     write_f4(fd, fmt, x1, x2, 0, 0);
 }
 
-void write_f1(int fd, const char *fmt, const void *x1) {
+static void write_f1(int fd, const char *fmt, const void *x1) {
     write_f4(fd, fmt, x1, 0, 0, 0);
 }
 
-void write_ln(int fd, const char *s) {
+static void write_ln(int fd, const char *s) {
     write_str(fd, s);
     write_char(fd, '\n');
 }
@@ -125,18 +131,18 @@ void write_ln(int fd, const char *s) {
 //=============================================================================
 //= assertions
 
-void die(const char *label, const char *msg) {
+static void die(const char *label, const char *msg) {
     write_f2(2, "%s: %s\n", label, msg);
     _exit(1);
 }
 
-void assert(const char *label, int condition) {
+static void assert(const char *label, int condition) {
     if (!condition) {
         die(label, "assertion failed");
     }
 }
 
-void unreachable_case(const char *label, int value) {
+static void unreachable_case(const char *label, int value) {
     write_f2(2, "%s: case not handled: %d\n", label, &value);
     _exit(1);
 }
@@ -144,11 +150,11 @@ void unreachable_case(const char *label, int value) {
 //=============================================================================
 //= dynamic memory allocation
 
-enum { Data_Size = 1000000 };
-char data[Data_Size];
-int data_len;
+enum { Data_Size = 1048576 };  // 1 MiB
+static char data[Data_Size];
+static int data_len;
 
-void *alloc(int len) {
+static void *alloc(int len) {
     if (data_len + len >= Data_Size) {
         die("alloc", "out of memory");
     }
@@ -157,7 +163,7 @@ void *alloc(int len) {
     return res;
 }
 
-void *mem_clone(void *s, int len) {
+static void *mem_clone(void *s, int len) {
     void *res = alloc(len);
     int i = 0;
     while (i++ < len)
@@ -165,10 +171,10 @@ void *mem_clone(void *s, int len) {
     return res;
 }
 
-char *strings[10240];
-int strings_len;
+static char *strings[10240];
+static int strings_len;
 
-const char *intern(const char *s, int len) {
+static const char *intern(const char *s, int len) {
     int i = 0;
     while (i < strings_len) {
         if (str_eq(strings[i], s))
@@ -188,15 +194,14 @@ const char *intern(const char *s, int len) {
 
 struct pos {
     const char *file;
-    int line;
-    int col;
+    int line, col;
 };
 
-void diag_at(struct pos *pos, const char *kind) {
+static void diag_at(struct pos *pos, const char *kind) {
     write_f4(2, "%s:%d:%d: %s: ", pos->file, &pos->line, &pos->col, kind);
 }
 
-void error_at(struct pos *pos, const char *msg) {
+static void error_at(struct pos *pos, const char *msg) {
     diag_at(pos, "error");
     write_ln(2, msg);
     _exit(1);
@@ -204,6 +209,12 @@ void error_at(struct pos *pos, const char *msg) {
 
 //=============================================================================
 //= symbols
+
+enum {
+    MAX_SYMS = 1024,
+    MAX_STRUCT_FIELDS = 16,
+    MAX_FUNC_PARAMS = 8,
+};
 
 enum {
     Sym_Var,
@@ -223,16 +234,12 @@ struct field {
 };
 
 struct func_params {
-    const char *names[8];
-    struct type *types[8];
+    const char *names[MAX_FUNC_PARAMS];
+    struct type *types[MAX_FUNC_PARAMS];
     int count;
 };
 
-enum {
-    MAX_SYMS = 1024,
-};
-
-struct sym {
+static struct sym {
     int kind;
     int ns;
     const char *name;
@@ -247,17 +254,17 @@ struct sym {
     struct tree *body;
     // case Sym_Struct:
     int nsyms;
-    struct field field_names[16];
+    struct field field_names[MAX_STRUCT_FIELDS];
 } syms[MAX_SYMS];
-int nsyms;
+static int nsyms;
 
-int sym_ns(struct sym *sym) {
+static int sym_ns(struct sym *sym) {
     if (sym->kind == Sym_Struct)
         return Ns_Struct;
     return 0;
 }
 
-struct sym *alloc_sym() {
+static struct sym *alloc_sym() {
     if (nsyms >= MAX_SYMS) {
         write_f1(2, "error: too many symbols\n", 0);
         _exit(1);
@@ -265,7 +272,7 @@ struct sym *alloc_sym() {
     return &syms[nsyms++];
 }
 
-void add_struct_field(struct sym *sym, const char *name, struct type *type) {
+static void add_struct_field(struct sym *sym, const char *name, struct type *type) {
     if (sym->nsyms >= 16) {
         write_f1(2, "error: too many fields in struct\n", 0);
         _exit(1);
@@ -285,38 +292,38 @@ enum {
     Type_Long,
     Type_Ptr,
     Type_Array,
-    Type_Struct,
     Type_Func,
+    Type_Struct,
 };
 
 enum {
     MAX_TYPES = 256,
 };
 
-struct type {
+static struct type {
     int kind;
     // for pointers
     struct type *ptr_to;
     // for arrays
     int array_len;
-    // for structs
-    struct sym *sym;
     // for functions
     struct type *ret_type;
     struct type *param_types[8];
     int nparams;
+    // for structs
+    struct sym *sym;
 } types[MAX_TYPES];
-int ntypes;
+static int ntypes;
 
-struct type *void_type;
-struct type *char_type;
-struct type *int_type;
-struct type *long_type;
-struct type *ptr_to_void;
-struct type *ptr_to_char;
-struct type *ptr_to_int;
+static struct type *void_type;
+static struct type *char_type;
+static struct type *int_type;
+static struct type *long_type;
+static struct type *ptr_to_void;
+static struct type *ptr_to_char;
+static struct type *ptr_to_int;
 
-int type_eq(struct type *a, struct type *b) {
+static int type_eq(struct type *a, struct type *b) {
     if (a == b)
         return 1;
     if (a->kind != b->kind)
@@ -325,10 +332,25 @@ int type_eq(struct type *a, struct type *b) {
         return type_eq(a->ptr_to, b->ptr_to);
     if (a->kind == Type_Array)
         return a->array_len == b->array_len && type_eq(a->ptr_to, b->ptr_to);
+    if (a->kind == Type_Func) {
+        if (!type_eq(a->ret_type, b->ret_type))
+            return 0;
+        if (a->nparams != b->nparams)
+            return 0;
+        int i = 0;
+        while (i < a->nparams) {
+            if (!type_eq(a->param_types[i], b->param_types[i]))
+                return 0;
+            i++;
+        }
+        return 1;
+    }
+    if (a->kind == Type_Struct)
+        return a->sym == b->sym;
     return 1;
 }
 
-struct type *intern_type(struct type ty) {
+static struct type *intern_type(struct type ty) {
     int i = 0;
     while (i < ntypes) {
         if (type_eq(&ty, &types[i]))
@@ -343,14 +365,14 @@ struct type *intern_type(struct type ty) {
     return &types[ntypes++];
 }
 
-struct type *new_ptr_type(struct type *base) {
+static struct type *new_ptr_type(struct type *base) {
     struct type ty;
     ty.kind = Type_Ptr;
     ty.ptr_to = base;
     return intern_type(ty);
 }
 
-struct type *new_array_type(struct type *base, int len) {
+static struct type *new_array_type(struct type *base, int len) {
     struct type ty;
     ty.kind = Type_Array;
     ty.ptr_to = base;
@@ -358,14 +380,14 @@ struct type *new_array_type(struct type *base, int len) {
     return intern_type(ty);
 }
 
-struct type *new_struct_type(struct sym *sym) {
+static struct type *new_struct_type(struct sym *sym) {
     struct type ty;
     ty.kind = Type_Struct;
     ty.sym = sym;
     return intern_type(ty);
 }
 
-struct type *new_func_type(struct type *ret_type, struct type **param_types, int nparams) {
+static struct type *new_func_type(struct type *ret_type, struct type **param_types, int nparams) {
     struct type ty;
     ty.kind = Type_Func;
     ty.ret_type = ret_type;
@@ -378,10 +400,10 @@ struct type *new_func_type(struct type *ret_type, struct type **param_types, int
     return intern_type(ty);
 }
 
-int align_up(int n, int align) {
+static int align_up(int n, int align) {
     return (n + align - 1) / align * align;
 }
-void type_layout(struct type *ty, int *size, int *align) {
+static void type_layout(struct type *ty, int *size, int *align) {
     if (ty->kind == Type_Void) {
         *size = 0;
         *align = 0;
@@ -398,8 +420,7 @@ void type_layout(struct type *ty, int *size, int *align) {
         *size = 8;
         *align = 8;
     } else if (ty->kind == Type_Array) {
-        int elem_size;
-        int elem_align;
+        int elem_size, elem_align;
         type_layout(ty->ptr_to, &elem_size, &elem_align);
         *size = align_up(elem_size, elem_align) * ty->array_len;
         *align = elem_align;
@@ -410,8 +431,7 @@ void type_layout(struct type *ty, int *size, int *align) {
         int i = 0;
         while (i < sym->nsyms) {
             struct field *field = &sym->field_names[i];
-            int field_size;
-            int field_align;
+            int field_size, field_align;
             type_layout(field->type, &field_size, &field_align);
             offset = align_up(offset, field_align);
             field->offset = offset;
@@ -423,28 +443,26 @@ void type_layout(struct type *ty, int *size, int *align) {
         *size = align_up(offset, max_align);
         *align = max_align;
     } else if (ty->kind == Type_Func) {
-        *size = 0;   // dummy size for function types
-        *align = 0;  // dummy align for function types
+        *size = 0;
+        *align = 0;
     } else {
         unreachable_case("type_layout", ty->kind);
     }
 }
 
-int type_size(struct type *ty) {
-    int size;
-    int align;
+static int type_size(struct type *ty) {
+    int size, align;
     type_layout(ty, &size, &align);
     return size;
 }
 
-int type_align(struct type *ty) {
-    int size;
-    int align;
+static int type_align(struct type *ty) {
+    int size, align;
     type_layout(ty, &size, &align);
     return align;
 }
 
-void type_init() {
+static void type_init() {
     void_type = &types[ntypes++];
     void_type->kind = Type_Void;
     char_type = &types[ntypes++];
@@ -458,7 +476,7 @@ void type_init() {
     ptr_to_int = new_ptr_type(int_type);
 }
 
-const char *type_str(struct type *ty) {
+static const char *type_str(struct type *ty) {
     if (ty->kind == Type_Void)
         return "void";
     if (ty->kind == Type_Char)
@@ -486,40 +504,40 @@ enum {
     MAX_SCOPES = 256,
 };
 
-struct scope {
+static struct scope {
     struct sym *syms[MAX_SYMS_PER_SCOPE];
     int nsyms;
 } scopes[MAX_SCOPES];
-struct scope *scope = scopes;
+static struct scope *scope = scopes;
 
-void enter_scope() {
+static void enter_scope(struct pos *pos) {
     if (scope - scopes >= MAX_SCOPES) {
-        die("enter_scope", "too many nested scopes");
+        error_at(pos, "too many nested scopes");
     }
     scope++;
     scope->nsyms = 0;
 }
 
-void leave_scope() {
+static void leave_scope() {
     if (scope <= scopes) {
-        die("leave_scope", "no scope to leave");
+        die("leave_scope", "scope underflow");
     }
     scope--;
 }
 
-struct sym *add_sym(struct pos *last_pos, int kind, const char *name) {
+static struct sym *add_sym(struct pos *pos, int kind, const char *name) {
     struct sym *sym = alloc_sym();
     sym->kind = kind;
     sym->name = name;
-    sym->last_pos = last_pos;
+    sym->last_pos = pos;
     if (scope->nsyms >= MAX_SYMS_PER_SCOPE) {
-        die("add_sym", "too many symbols in scope");
+        error_at(pos, "symbol limit reached in this scope");
     }
     scope->syms[scope->nsyms++] = sym;
     return sym;
 }
 
-struct sym *lookup_in(struct scope *scope, int ns, const char *name) {
+static struct sym *lookup_in(struct scope *scope, int ns, const char *name) {
     if (!name)
         return 0;
     int i = 0;
@@ -532,7 +550,7 @@ struct sym *lookup_in(struct scope *scope, int ns, const char *name) {
     return 0;
 }
 
-struct sym *lookup(int ns, const char *name) {
+static struct sym *lookup(int ns, const char *name) {
     struct scope *s = scope;
     while (s >= scopes) {
         struct sym *sym = lookup_in(s, ns, name);
@@ -543,14 +561,14 @@ struct sym *lookup(int ns, const char *name) {
     return 0;
 }
 
-void decl_conflict(struct pos *pos, struct sym *sym, const char *msg) {
+static void decl_conflict(struct pos *pos, struct sym *sym, const char *msg) {
     diag_at(pos, "error");
     write_f2(2, "'%s' %s.", sym->name, msg);
     write_f3(2, " Previous declaration at %s:%d:%d\n", sym->last_pos->file, &sym->last_pos->line, &sym->last_pos->col);
     _exit(1);
 }
 
-struct sym *declare_struct(struct pos *pos, const char *name, int is_def) {
+static struct sym *declare_struct(struct pos *pos, const char *name, int is_def) {
     struct sym *sym = lookup_in(scope, Ns_Struct, name);
     if (sym) {
         if (sym->kind != Sym_Struct) {
@@ -568,7 +586,7 @@ struct sym *declare_struct(struct pos *pos, const char *name, int is_def) {
     return sym;
 }
 
-struct sym *define_const(struct pos *pos, const char *name, int val) {
+static struct sym *define_const(struct pos *pos, const char *name, int val) {
     struct sym *sym = lookup_in(scope, 0, name);
     if (sym) {
         if (sym->kind != Sym_Const) {
@@ -582,7 +600,7 @@ struct sym *define_const(struct pos *pos, const char *name, int val) {
     return sym;
 }
 
-struct sym *declare_var(struct pos *pos, const char *name, struct type *type, int is_def) {
+static struct sym *declare_var(struct pos *pos, const char *name, struct type *type, int is_def) {
     struct sym *sym = lookup_in(scope, 0, name);
     if (sym) {
         if (sym->kind != Sym_Var) {
@@ -681,20 +699,20 @@ struct tree {
     struct tree *next;
 };
 
-struct tree *new_expr(struct pos *pos, int kind) {
+static struct tree *new_expr(struct pos *pos, int kind) {
     struct tree *expr = alloc(sizeof(struct tree));
     expr->pos = *pos;
     expr->kind = kind;
     return expr;
 }
 
-struct tree *new_unary_expr(struct pos *pos, int kind, struct tree *sub) {
+static struct tree *new_unary_expr(struct pos *pos, int kind, struct tree *sub) {
     struct tree *expr = new_expr(pos, kind);
     expr->sub = sub;
     return expr;
 }
 
-struct tree *new_bin_expr(int kind, struct tree *lhs, struct tree *rhs) {
+static struct tree *new_bin_expr(int kind, struct tree *lhs, struct tree *rhs) {
     struct tree *expr = new_expr(&lhs->pos, kind);
     expr->sub = lhs;
     lhs->next = rhs;
@@ -704,7 +722,7 @@ struct tree *new_bin_expr(int kind, struct tree *lhs, struct tree *rhs) {
 //=============================================================================
 //= eval
 
-int eval(struct tree *expr) {
+static int eval(struct tree *expr) {
     if (expr->kind == Expr_Num) {
         return expr->int_val;
     } else if (expr->kind == Expr_Ident) {
@@ -747,17 +765,17 @@ enum {
     MAX_TOK_LEN = 256,
 };
 
-int inp;
+static int inp;
 
-struct pos chr_pos;
-int chr;
+static struct pos chr_pos;
+static int chr;
 
-int tok;
-struct pos tok_pos;
-char tok_str[MAX_TOK_LEN];
-int tok_len;
+static int tok;
+static struct pos tok_pos;
+static char tok_str[MAX_TOK_LEN];
+static int tok_len;
 
-void next_chr() {
+static void next_chr() {
     if (chr == '\n') {
         chr_pos.line++;
         chr_pos.col = 1;
@@ -770,21 +788,14 @@ void next_chr() {
     chr = read_char(inp);
 }
 
-void lex_init(const char *file) {
+static void lex_init(const char *file) {
     chr_pos.file = file;
     chr_pos.line = 1;
     chr_pos.col = 1;
     next_chr();
 }
 
-int in(const char *s, int c) {
-    while (*s)
-        if (c == *s++)
-            return 1;
-    return 0;
-}
-
-void lex() {
+static void lex() {
     while (1) {
         tok_len = 0;
         tok_pos = chr_pos;
@@ -809,11 +820,19 @@ void lex() {
                     break;
                 if (chr == EOF)
                     error_at(&chr_pos, "unterminated string/char literal");
+                if (delim == '\'' && tok_len != 1)
+                    error_at(&chr_pos, "too many characters in char literal");
                 if (chr == '\\') {
                     next_chr();
+                    const char *escapes = "abfnrtv\\'\"?";
+                    const char *unescapes = "\a\b\f\n\r\t\v\\\'\"\?";
+                    if (find_chr(escapes, chr))
+                        chr = unescapes[find_chr(escapes, chr) - escapes];
                 }
                 next_chr();
             }
+            if (delim == '\'' && tok_len == 0)
+                error_at(&chr_pos, "empty char literal");
             next_chr();
             tok = delim == '"' ? TokStr : TokChr;
         } else {
@@ -824,9 +843,9 @@ void lex() {
                 while (chr != '\n' && chr != EOF)
                     next_chr();
                 continue;
-            } else if (in("<>!=", prev_chr) && chr == '=')
+            } else if (find_chr("<>!=", prev_chr) && chr == '=')
                 next_chr();
-            else if (in("&|<>+-", prev_chr) && chr == prev_chr)
+            else if (find_chr("&|<>+-", prev_chr) && chr == prev_chr)
                 next_chr();
             else if (prev_chr == '-' && chr == '>')
                 next_chr();
@@ -842,35 +861,29 @@ void lex() {
 //=============================================================================
 //= parse.dsl
 
-void parse_init() {
+static void parse_init() {
     lex();
 }
 
-int str_to_int(const char *s) {
+static int str_to_int(const char *s) {
     int n = 0;
     while (*s)
         n = n * 10 + (*s++ - '0');
     return n;
 }
 
-int at(const char *s) {
-    return str_eq(tok_str, s);
+static int at(const char *t) {
+    return str_eq(tok_str, t);
 }
 
-int eat(const char *t) {
+static int eat(const char *t) {
     if (!at(t))
         return 0;
     lex();
     return 1;
 }
 
-void unexpected_expected(const char *d) {
-    diag_at(&tok_pos, "error");
-    write_f2(2, "expected %s, got '%s'\n", d, tok_str);
-    _exit(1);
-}
-
-void expect(const char *t) {
+static void expect(const char *t) {
     if (!eat(t)) {
         diag_at(&tok_pos, "error");
         write_f2(2, "expected '%s', got '%s'\n", t, tok_str);
@@ -878,7 +891,13 @@ void expect(const char *t) {
     }
 }
 
-const char *p_ident() {
+static void unexpected_expected(const char *d) {
+    diag_at(&tok_pos, "error");
+    write_f2(2, "expected %s, got '%s'\n", d, tok_str);
+    _exit(1);
+}
+
+static const char *p_ident() {
     if (tok != TokWrd) {
         unexpected_expected("identifier");
     }
@@ -887,7 +906,7 @@ const char *p_ident() {
     return res;
 }
 
-int p_num() {
+static int p_num() {
     if (tok != TokNum) {
         unexpected_expected("number");
     }
@@ -907,26 +926,24 @@ enum {
     Decl_TypeName,
 };
 
-struct {
-    struct pos pos;
-    const char *name;
+static void p_decl(int scope, void *ctx);
+
+static int at_storage_class() {
+    return at("static") || at("extern");
+}
+
+static int at_typename() {
+    return at("void") || at("char") || at("int") || at("long") || at("struct") || at("enum") || at("const");
+}
+
+static int at_decl() {
+    return at_storage_class() || at_typename();
+}
+
+static struct type *p_typename() {
     struct type *type;
-    struct tree *init;
-} parsed_decl;
-
-void p_decl(int scope);
-
-int at_typename() {
-    return at("void") || at("char") || at("int") || at("long") || at("struct") || at("enum");
-}
-
-int at_decl() {
-    return at("const") || at_typename();
-}
-
-struct type *p_typename() {
-    p_decl(Decl_TypeName);
-    return parsed_decl.type;
+    p_decl(Decl_TypeName, &type);
+    return type;
 }
 
 enum {
@@ -947,21 +964,21 @@ enum {
     Prec_Primary,
 };
 
-struct tree *p_expr(int rbp);
-int p_const_expr();
+static struct tree *p_expr(int rbp);
+static int p_const_expr();
 
-struct tree *p_unary_expr(struct pos *pos, int kind) {
+static struct tree *p_unary_expr(struct pos *pos, int kind) {
     struct tree *res = p_expr(Prec_Unary);
     res = new_unary_expr(pos, kind, res);
     return res;
 }
 
-struct tree *p_bin_expr(struct tree *lhs, int kind, int rbp) {
+static struct tree *p_bin_expr(struct tree *lhs, int kind, int rbp) {
     struct tree *rhs = p_expr(rbp);
     return new_bin_expr(kind, lhs, rhs);
 }
 
-struct tree *p_expr(int rbp) {
+static struct tree *p_expr(int rbp) {
     struct pos pos = tok_pos;
     struct tree *acc;
     if (eat("(")) {
@@ -1092,17 +1109,17 @@ struct tree *p_expr(int rbp) {
     return acc;
 }
 
-int p_const_expr() {
+static int p_const_expr() {
     return eval(p_expr(Prec_Cond - 1));
 }
 
-struct tree *p_stmt() {
+static struct tree *p_stmt() {
     struct pos pos = tok_pos;
     if (eat("{")) {
         struct tree *stmt = new_expr(&pos, Stmt_Block);
         if (eat("}"))
             return stmt;
-        enter_scope();
+        enter_scope(&pos);
         stmt->sub = p_stmt();
         struct tree *tail = stmt->sub;
         while (!eat("}")) {
@@ -1147,10 +1164,7 @@ struct tree *p_stmt() {
         return stmt;
     } else if (at_decl()) {
         struct tree *stmt = new_expr(&pos, Stmt_Decl);
-        p_decl(Decl_Local);
-        stmt->str_val = parsed_decl.name;
-        stmt->type = parsed_decl.type;
-        stmt->sub = parsed_decl.init;
+        p_decl(Decl_Local, stmt);
         return stmt;
     } else {
         struct tree *expr = p_expr(0);
@@ -1159,113 +1173,167 @@ struct tree *p_stmt() {
     }
 }
 
-// small subset of C declaration syntax
-void p_decl(int scope) {
-    while (eat("const"))
-        ;  // discard const qualifier
-    struct type *type;
-    if (eat("void")) {
-        type = void_type;
-    } else if (eat("int")) {
-        type = int_type;
-    } else if (eat("char")) {
-        type = char_type;
-    } else if (eat("long")) {
-        type = long_type;
-    } else if (eat("struct")) {
-        struct pos name_pos = tok_pos;
+static void p_decl(int scope, void *ctx) {
+    struct pos pos = tok_pos;
+    const char *storage_class = 0;
+    struct type *base_type = 0;
+    while (1) {
+        if (eat("const")) {
+            // ignored
+        } else if (!storage_class && eat("static")) {
+            storage_class = "static";
+        } else if (!storage_class && eat("extern")) {
+            storage_class = "extern";
+        } else if (!base_type && eat("void")) {
+            base_type = void_type;
+        } else if (!base_type && eat("int")) {
+            base_type = int_type;
+        } else if (!base_type && eat("char")) {
+            base_type = char_type;
+        } else if (!base_type && eat("long")) {
+            base_type = long_type;
+        } else if (!base_type && eat("struct")) {
+            struct pos name_pos = tok_pos;
+            const char *name = 0;
+            if (tok == TokWrd) {
+                name = p_ident();
+            }
+            int is_def = at("{");
+            struct sym *sym = declare_struct(&name_pos, name, is_def);
+            if (eat("{")) {
+                while (!eat("}")) {
+                    p_decl(Decl_Struct, sym);
+                }
+            }
+            base_type = new_struct_type(sym);
+        } else if (!base_type && eat("enum")) {
+            expect("{");
+            int val = 0;
+            while (!eat("}")) {
+                struct pos name_pos = tok_pos;
+                const char *name = p_ident();
+                if (eat("="))
+                    val = p_const_expr();
+                if (!at("}"))
+                    expect(",");
+                define_const(&name_pos, name, val);
+                val++;
+            }
+            base_type = int_type;
+        } else {
+            break;
+        }
+    }
+    if (!base_type)
+        unexpected_expected("type specifier");
+    if (storage_class && scope != Decl_Global && scope != Decl_Local)
+        error_at(&pos, "storage class specifier is not allowed here");
+
+    int n_declarators = 0;
+    while (1) {
+        struct type *type = base_type;
         const char *name = 0;
-        if (tok == TokWrd) {
+        int has_params = 0;
+        struct func_params params;
+        int has_func_body = 0;
+        struct tree *init = 0;
+
+        while (eat("*")) {
+            type = new_ptr_type(type);
+        }
+
+        struct pos name_pos = tok_pos;
+        if (scope != Decl_TypeName && tok == TokWrd) {
             name = p_ident();
         }
-        int is_def = at("{");
-        struct sym *sym = declare_struct(&name_pos, name, is_def);
-        if (eat("{")) {
-            while (!eat("}")) {
-                p_decl(Decl_Struct);
-                add_struct_field(sym, parsed_decl.name, parsed_decl.type);
-            }
-        }
-        type = new_struct_type(sym);
-    } else if (eat("enum")) {
-        expect("{");
-        int val = 0;
-        while (!eat("}")) {
-            struct pos name_pos = tok_pos;
-            const char *name = p_ident();
-            if (eat("="))
-                val = p_const_expr();
-            if (!at("}"))
-                expect(",");
-            define_const(&name_pos, name, val);
-            val++;
-        }
-    } else {
-        unexpected_expected("type specifier");
-    }
 
-    while (eat("*")) {
-        type = new_ptr_type(type);
-    }
-
-    struct pos name_pos = tok_pos;
-    const char *name = 0;
-    if (tok == TokWrd) {
-        name = p_ident();
-    }
-
-    if (eat("(")) {
-        struct func_params params;
-        params.count = 0;
-        while (!eat(")")) {
-            if (params.count >= 8) {
-                error_at(&tok_pos, "too many parameters in function declaration");
+        // simplified grammar: either a function, array or object definition
+        if (eat("(") && (scope == Decl_Global || scope == Decl_Local)) {
+            has_params = 1;
+            params.count = 0;
+            while (!eat(")")) {
+                if (params.count >= 8) {
+                    error_at(&tok_pos, "too many parameters in function declaration");
+                }
+                if (params.count > 0)
+                    expect(",");
+                p_decl(Decl_Param, &params);
             }
-            if (params.count > 0)
-                expect(",");
-            p_decl(Decl_Param);
-            params.names[params.count] = parsed_decl.name;
-            params.types[params.count] = parsed_decl.type;
-            params.count++;
-        }
-        int is_def = scope == Decl_Global && at("{");
-        struct sym *sym = declare_func(&name_pos, name, type, &params, is_def);
-        if (is_def) {
-            enter_scope();
-            int i = 0;
-            while (i < params.count) {
-                declare_var(&name_pos, params.names[i], params.types[i], 1);
-                i++;
-            }
-            sym->body = p_stmt();
-            leave_scope();
-        } else {
-            expect(";");
-        }
-    } else {
-        if (at("[")) {
+        } else if (at("[")) {
             while (eat("[")) {
                 int len = p_const_expr();
                 expect("]");
                 type = new_array_type(type, len);
             }
+        } else if (eat("=") && (scope == Decl_Global || scope == Decl_Local)) {
+            init = p_expr(0);
         }
-        if (eat("=") && (scope == Decl_Global || scope == Decl_Local)) {
-            p_expr(0);
+
+        if (scope == Decl_TypeName) {
+            *(struct type **)ctx = type;
+            return;  // max one type per abstract declaration
+        } else if (scope == Decl_Param) {
+            struct func_params *params = (struct func_params *)ctx;
+            if (params->count >= MAX_FUNC_PARAMS) {
+                error_at(&name_pos, "too many parameters in function declaration");
+            }
+            params->names[params->count] = name;
+            params->types[params->count] = type;
+            params->count++;
+            return;  // max one parameter per declaration
+        } else if (!name) {
+            // declaration does not declare a function or object
+        } else if (has_params) {
+            // function declaration
+            if (scope != Decl_Global && scope != Decl_Local) {
+                error_at(&name_pos, "function declaration is not allowed here");
+            }
+            has_func_body = scope == Decl_Global && n_declarators == 0 && at("{");
+            struct sym *sym = declare_func(&name_pos, name, type, &params, has_func_body);
+            if (has_func_body) {
+                enter_scope(&tok_pos);
+                int i = 0;
+                while (i < params.count) {
+                    declare_var(&name_pos, params.names[i], params.types[i], 1);
+                    i++;
+                }
+                sym->body = p_stmt();
+                leave_scope();
+                return;  // max one function definition per declaration
+            }
+        } else {
+            // object declaration
+            if (scope == Decl_Local) {
+                declare_var(&name_pos, name, type, 1);
+                struct tree *decl = (struct tree *)ctx;
+                decl->type = type;
+                decl->str_val = name;
+                decl->sub = init;
+            } else if (scope == Decl_Global) {
+                declare_var(&name_pos, name, type, 1);
+            } else if (scope == Decl_Struct) {
+                struct sym *sym = (struct sym *)ctx;
+                if (sym->nsyms >= MAX_STRUCT_FIELDS) {
+                    error_at(&name_pos, "too many fields in struct");
+                }
+                struct field *field = &sym->field_names[sym->nsyms++];
+                field->name = name;
+                field->type = type;
+            } else {
+                unreachable_case("p_decl (object declaration)", scope);
+            }
         }
-        if (scope != Decl_Param && scope != Decl_TypeName)
+
+        if (!name || !eat(",")) {
             expect(";");
-        if (scope == Decl_Global || scope == Decl_Local)
-            declare_var(&name_pos, name, type, scope == Decl_Local);
+            return;
+        }
+
+        n_declarators++;
+
+        // diag_at(&name_pos, "info");
+        // write_f3(2, "declared %s '%s'\n", &scope, name ? name : "<anon>", &type->kind);
     }
-
-    parsed_decl.pos = name_pos;
-    parsed_decl.name = name;
-    parsed_decl.type = type;
-    parsed_decl.init = 0;
-
-    // diag_at(&name_pos, "info");
-    // write_f3(2, "declared %s '%s'\n", &scope, name ? name : "<anon>", &type->kind);
 }
 
 int main(int argc, char **argv) {
@@ -1283,7 +1351,7 @@ int main(int argc, char **argv) {
     lex_init(file_name);
     parse_init();
     while (tok != EOF) {
-        p_decl(Decl_Global);
+        p_decl(Decl_Global, 0);
     }
 
     int i = 0;
@@ -1298,4 +1366,6 @@ int main(int argc, char **argv) {
     write_f1(2, "allocated %d types\n", &ntypes);
     write_f1(2, "allocated %d symbols\n", &nsyms);
     write_f1(2, "interned %d strings\n", &strings_len);
+
+    return 0;
 }
