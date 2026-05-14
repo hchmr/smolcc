@@ -1,3 +1,10 @@
 #!/usr/bin/env bash
 
-make && /usr/bin/time -l -h ./out/ucc main.c
+set -euo pipefail
+
+make
+
+./scripts/self-compile
+./out/ucc tests/test.c
+
+echo "All tests passed!"

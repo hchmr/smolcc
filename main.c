@@ -140,9 +140,11 @@ static int align_up(int n, int align) {
 }
 
 static const char *find_chr(const char *s, int c) {
-    while (*s)
-        if (c == *s++)
+    while (*s) {
+        if (c == *s)
             return s;
+        s++;
+    }
     return 0;
 }
 
@@ -600,7 +602,7 @@ static struct scope *curr_scope = scopes;
 
 static void enter_scope(struct pos *pos) {
     int depth = curr_scope - scopes;
-    if (depth >= MAX_SCOPES)
+    if (depth + 1 >= MAX_SCOPES)
         error_at(pos, "too many nested scopes");
     curr_scope++;
     curr_scope->n_syms = 0;
@@ -608,7 +610,7 @@ static void enter_scope(struct pos *pos) {
 
 static void reenter_scope() {
     int depth = curr_scope - scopes;
-    assert("reenter_scope", depth < MAX_SCOPES);
+    assert("reenter_scope", depth + 1 < MAX_SCOPES);
     curr_scope++;
 }
 
@@ -743,16 +745,30 @@ static struct sym *declare_global(struct pos *pos, int linkage, const char *name
     return sym;
 }
 
-static struct sym *declare_func(struct pos *pos, int linkage, const char *name, struct type *ret_type,
-                                struct func_param *params, int n_params, int is_def) {
+static struct type *prototype_to_func_type(struct type *ret_type, struct func_param *params, int n_params) {
     struct type *param_types[MAX_FUNC_PARAMS];
     int i = 0;
     while (i < n_params) {
         param_types[i] = params[i].type;
         i++;
     }
-    struct type *type = new_func_type(ret_type, param_types, n_params);
+    return new_func_type(ret_type, param_types, n_params);
+}
 
+static void set_func_params(struct sym *sym, struct func_param *params, int n_params, int is_def) {
+    sym->n_params = n_params;
+    int i = 0;
+    while (i < n_params) {
+        sym->params[i].type = params[i].type;
+        if (is_def)
+            sym->params[i].name = params[i].name;
+        i++;
+    }
+}
+
+static struct sym *declare_func(struct pos *pos, int linkage, const char *name, struct type *ret_type,
+                                struct func_param *params, int n_params, int is_def) {
+    struct type *type = prototype_to_func_type(ret_type, params, n_params);
     struct sym *sym = lookup_in(curr_scope, 0, name);
     if (sym) {
         if (sym->kind != Sym_Func)
@@ -763,11 +779,13 @@ static struct sym *declare_func(struct pos *pos, int linkage, const char *name, 
             decl_conflict(pos, sym, "already declared as non-static");
         if (is_def && sym->is_defined)
             decl_conflict(pos, sym, "already defined");
+        set_func_params(sym, params, n_params, is_def);
         sym->is_defined = sym->is_defined | is_def;
         return sym;
     }
     sym = add_sym(pos, Sym_Func, name);
     sym->type = type;
+    set_func_params(sym, params, n_params, is_def);
     sym->is_defined = is_def;
     sym->linkage = linkage;
     return sym;
@@ -957,6 +975,7 @@ static struct expr *apply_assignment_conversion(struct expr *rhs, struct type *t
         return cast_to(t, rhs);
     } else {
         error_at(&rhs->pos, "target type mismatch");
+        return rhs;
     }
 }
 
@@ -970,6 +989,14 @@ static struct expr *ptr_decay(struct expr *e) {
     } else {
         return e;
     }
+}
+
+static struct type *as_callable_type(struct type *t) {
+    if (is_func_type(t))
+        return t;
+    if (is_ptr_type(t) && is_func_type(t->ptr_to))
+        return t->ptr_to;
+    return 0;
 }
 
 static struct expr *elab_expr(struct expr *e);
@@ -1016,9 +1043,9 @@ static struct expr *elab_expr(struct expr *e) {
         e->type = e->subs[0]->type;
     } else if (k == Expr_Call) {
         struct expr *callee = e->subs[0];
-        if (callee->type->kind != Expr_Addr && callee->subs[0]->kind != Expr_Ident)
+        struct type *func = as_callable_type(callee->type);
+        if (!func)
             error_at(&e->pos, "called object is not a function");
-        struct type *func = callee->subs[0]->sym->type;
 
         struct expr **args = &e->subs[1];
         int n_args = e->n_subs - 1;
@@ -1258,9 +1285,8 @@ static void lex() {
                 if (chr == '\\') {
                     n_ext_chr();
                     const char *escapes = "abfnrtv\\'\"?", *unescapes = "\a\b\f\n\r\t\v\\\'\"\?";
-                    if (find_chr(escapes, chr)) {
+                    if (find_chr(escapes, chr))
                         decoded = unescapes[find_chr(escapes, chr) - escapes];
-                    }
                 }
                 n_ext_chr();
                 tok_str[tok_len - 1] = decoded;
@@ -1634,6 +1660,8 @@ static struct stmt *p_stmt() {
     } else if (at_decl()) {
         struct stmt *stmt = 0;
         p_decl(Decl_Local, &stmt);
+        if (!stmt)
+            stmt = new_stmt(&pos, Stmt_Empty);
         return stmt;
     } else {
         struct stmt *stmt = new_stmt(&pos, Stmt_Expr);
@@ -1740,7 +1768,7 @@ extern void p_decl(int scope, void *ctx) {
         }
 
         // simplified grammar: either a function, array or object definition
-        if (eat("(") && (scope == Decl_Global || scope == Decl_Local)) {
+        if (eat("(")) {
             has_params = 1;
             n_params = 0;
             enter_scope(&name_pos);
@@ -1752,6 +1780,7 @@ extern void p_decl(int scope, void *ctx) {
                 p_decl(Decl_Param, &params[n_params++]);
             }
             leave_scope();
+            type = prototype_to_func_type(type, params, n_params);
         } else if (at("[")) {
             while (eat("[")) {
                 int len = p_const_expr();
@@ -1767,8 +1796,10 @@ extern void p_decl(int scope, void *ctx) {
             return;  // max one type per abstract declaration
         } else if (scope == Decl_Param) {
             struct func_param *param = (struct func_param *)ctx;
-            if (is_array_type(type) || is_func_type(type)) {
+            if (is_array_type(type)) {
                 type = new_ptr_type(type->ptr_to);
+            } else if (is_func_type(type)) {
+                type = new_ptr_type(type);
             }
             if (!is_object_type(type))
                 error_at(&name_pos, "bad parameter type");
@@ -1784,7 +1815,7 @@ extern void p_decl(int scope, void *ctx) {
                 error_at(&name_pos, "function declaration is not allowed here");
             int linkage = storage_class ? (storage_class[0] == 's' ? Internal : External) : 0;
             has_func_body = scope == Decl_Global && n_declarators == 0 && at("{");
-            struct sym *sym = declare_func(&name_pos, linkage, name, type, params, n_params, has_func_body);
+            struct sym *sym = declare_func(&name_pos, linkage, name, type->ret_type, params, n_params, has_func_body);
             if (has_func_body) {
                 reenter_scope();
                 curr_func = sym;
@@ -1857,25 +1888,27 @@ int main(int argc, char **argv) {
     // list objects and functions
     struct scope *scope = &scopes[0];
     int i = 0;
+    int n_funcs = 0, n_objs = 0;
     while (i < scope->n_syms) {
-        struct sym *sym = scope->syms[i];
+        struct sym *sym = scope->syms[i++];
         const char *linkage_str = sym->linkage == Internal ? "internal" : "external";
         if (sym->kind == Sym_Func) {
             if (sym->linkage != Internal && !sym->is_defined)
                 continue;  // declaration, external linkage
             if (sym->linkage == Internal && !sym->is_defined)
-                ;  // declaration with internal linkage, missing definition
+                continue;  // declaration with internal linkage, missing definition
             write_f3(2, "function(name=%s, linkage=%s, n_params=%d)\n", sym->name, linkage_str, &sym->n_params);
+            n_funcs++;
         } else if (sym->kind == Sym_Global) {
             if (sym->linkage == External && !sym->is_defined)
                 continue;  // declaration, external linkage
             if (!sym->is_defined)
                 ;  // tentative definition
             write_f3(2, "object(name=%s, linkage=%s, type=%s)\n", sym->name, linkage_str, type_str(sym->type));
+            n_objs++;
         }
-        i++;
     }
-    write_f1(2, "%d global objects/functions defined\n", &scope->n_syms);
+    write_f2(2, "defined %d functions and %d objects\n", &n_funcs, &n_objs);
 
     write_f1(2, "allocated %d bytes from arena\n", &arena_len);
     write_f1(2, "allocated %d types\n", &n_types);
