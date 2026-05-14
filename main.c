@@ -476,6 +476,12 @@ static int is_object_type(struct type *ty) {
 static int is_incompletete_type(struct type *ty) {
     return !is_object_type(ty) && !is_func_type(ty);
 }
+static int is_allowed_func_ret_type(struct type *ty) {
+    return is_void_type(ty) || is_scalar(ty);
+}
+static int is_allowed_func_param_type(struct type *ty) {
+    return is_scalar(ty);
+}
 
 static struct type *intern_type(struct type *ty) {
     int i = 0;
@@ -729,7 +735,7 @@ static struct sym *declare_global(struct pos *pos, int linkage, const char *name
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
         if (!type_eq(sym->type, type))
             decl_conflict(pos, sym, "already declared with a different type");
-        if (sym->linkage == Internal && linkage != Internal)
+        if (sym->linkage == Internal && linkage == 0)
             decl_conflict(pos, sym, "already declared as static");
         if (sym->linkage != Internal && linkage == Internal)
             decl_conflict(pos, sym, "already declared as non-static");
@@ -768,6 +774,8 @@ static void set_func_params(struct sym *sym, struct func_param *params, int n_pa
 
 static struct sym *declare_func(struct pos *pos, int linkage, const char *name, struct type *ret_type,
                                 struct func_param *params, int n_params, int is_def) {
+    if (!is_allowed_func_ret_type(ret_type))
+        error_at(pos, "bad function return type");
     struct type *type = prototype_to_func_type(ret_type, params, n_params);
     struct sym *sym = lookup_in(curr_scope, 0, name);
     if (sym) {
@@ -903,6 +911,20 @@ static struct stmt *new_stmt(struct pos *pos, int kind) {
 static struct sym *curr_func;
 static struct stmt *curr_loop;
 
+static struct expr *wrap_with(int kind, struct type *type, struct expr *orig) {
+    struct expr *wrapper = new_expr(&orig->pos, kind, 1);
+    wrapper->type = type;
+    wrapper->subs[0] = orig;
+    return wrapper;
+}
+
+static int can_assign_ptr_type(struct type *target_type, struct type *rhs_type) {
+    assert("can_assign_ptr_type", is_ptr_type(target_type) && is_ptr_type(rhs_type));
+    if (type_eq(target_type, rhs_type))
+        return 1;
+    return is_void_ptr(target_type) || is_void_ptr(rhs_type);
+}
+
 // expression predicates
 static int is_var_expr(struct expr *expr) {
     return expr->kind == Expr_Ident && (expr->sym->kind == Sym_Local || expr->sym->kind == Sym_Global);
@@ -923,13 +945,6 @@ static int is_assignable(struct expr *expr) {
 static int is_null_ptr(struct expr *expr) {
     return expr->kind == Expr_Num && expr->int_val == 0
         || expr->kind == Expr_Cast && is_void_ptr(expr->type) && is_null_ptr(expr->subs[0]);
-}
-
-static struct expr *wrap_with(int kind, struct type *type, struct expr *orig) {
-    struct expr *wrapper = new_expr(&orig->pos, kind, 1);
-    wrapper->type = type;
-    wrapper->subs[0] = orig;
-    return wrapper;
 }
 
 // coercion
@@ -970,7 +985,7 @@ static struct expr *apply_assignment_conversion(struct expr *rhs, struct type *t
     } else if (is_arithmetic(rhs->type) && is_arithmetic(t)) {
         return cast_to(t, rhs);
     } else if (is_ptr_type(t)) {
-        if (!is_void_ptr(t) && !(is_void_ptr(rhs->type) || is_null_ptr(rhs)))
+        if (!is_null_ptr(rhs) && (!is_ptr_type(rhs->type) || !can_assign_ptr_type(t, rhs->type)))
             error_at(&rhs->pos, "target type mismatch. Pointer types are incompatible.");
         return cast_to(t, rhs);
     } else {
@@ -1161,14 +1176,18 @@ static struct expr *elab_expr(struct expr *e) {
     return e;
 }
 
-static struct expr *chk_expr(struct expr *expr, struct type *expected) {
+static struct expr *elab_rvalue_expr(struct expr *expr) {
     expr = elab_expr(expr);
-    expr = ptr_decay(expr);  // TODO
+    return ptr_decay(expr);
+}
+
+static struct expr *chk_expr(struct expr *expr, struct type *expected) {
+    expr = elab_rvalue_expr(expr);
     return apply_assignment_conversion(expr, expected);
 }
 
 static struct expr *chk_cond_expr(struct expr *expr) {
-    expr = elab_expr(expr);
+    expr = elab_rvalue_expr(expr);
     if (!is_scalar(expr->type))
         error_at(&expr->pos, "condition must have scalar type");
     return expr;
@@ -1611,7 +1630,7 @@ static struct stmt *p_stmt() {
 
         expect("(");
         stmt->expr = p_expr(0);
-        chk_cond_expr(stmt->expr);
+        stmt->expr = chk_cond_expr(stmt->expr);
         expect(")");
 
         enter_scope(&pos);
@@ -1630,7 +1649,7 @@ static struct stmt *p_stmt() {
 
         expect("(");
         stmt->expr = p_expr(0);
-        chk_cond_expr(stmt->expr);
+        stmt->expr = chk_cond_expr(stmt->expr);
         expect(")");
 
         struct stmt *outer_loop = curr_loop;
@@ -1693,7 +1712,7 @@ static struct type *p_struct() {
         }
     }
 
-    if (!name && !sym->name)
+    if (!name && !is_def)
         error_at(&name_pos, "declaration of anonymous struct must be a definition");
 
     return sym->type;
@@ -1801,7 +1820,7 @@ extern void p_decl(int scope, void *ctx) {
             } else if (is_func_type(type)) {
                 type = new_ptr_type(type);
             }
-            if (!is_object_type(type))
+            if (!is_allowed_func_param_type(type))
                 error_at(&name_pos, "bad parameter type");
             param->type = type;
             param->name = name;

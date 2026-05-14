@@ -1,10 +1,75 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -Eeuo pipefail
 
 make
 
-./scripts/self-compile
-./out/ucc tests/test.c
+temp_files=()
+nfailures=0
 
-echo "All tests passed!"
+cleanup() {
+    if ((${#temp_files[@]})); then
+        rm -f -- "${temp_files[@]}"
+    fi
+}
+
+trap cleanup EXIT
+
+tmpfile() {
+    local file
+    file="$(mktemp)"
+    temp_files+=("$file")
+    printf '%s\n' "$file"
+}
+
+run() {
+    local file="$1"
+    local expected_status="${2:-0}"
+
+    local stderr_path
+    stderr_path="$(tmpfile)"
+
+    printf '==> %s ' "$file"
+
+    local status=0
+    if ./out/ucc "$file" >/dev/null 2>"$stderr_path"; then
+        status=0
+    else
+        status=$?
+    fi
+
+    if [[ $status -ne $expected_status ]]; then
+        printf '\033[31mFAIL\033[0m\n'
+        printf 'Expected exit status: %d\n' "$expected_status"
+        printf 'Actual exit status:   %d\n' "$status"
+
+        if [[ -s "$stderr_path" ]]; then
+            printf '\nstderr:\n'
+            cat "$stderr_path"
+        fi
+
+        (( nfailures+=1 ))
+    else
+        printf '\033[32mOK\033[0m\n'
+    fi
+}
+
+run_group() {
+    local expected_status="$1"
+    shift
+
+    local file
+    for file in "$@"; do
+        [[ -e "$file" ]] || continue
+        run "$file" "$expected_status"
+    done
+}
+
+run_group 0 main.c tests/*.c
+run_group 1 tests/bad/*.c
+
+if [[ $nfailures -eq 0 ]]; then
+    printf '\nAll tests passed!\n'
+else
+    printf '\n%d test(s) failed!\n' "$nfailures"
+fi

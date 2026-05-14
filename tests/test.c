@@ -14,6 +14,8 @@ enum {
 int alpha, gamma;
 static int internal_counter;
 static long internal_total;
+static int merged_linkage_obj;
+extern int merged_linkage_obj;
 char *escaped = "a\n\t\?";
 int mode_default = Mode_All;
 long counts[Mode_All][2];
@@ -47,9 +49,12 @@ struct Pair external_pair;
 struct Pair *pair_ptr;
 struct Node head;
 struct Forward forward_value;
+struct {
+    int bits;
+} anon_global;
 
 int zero();
-struct Pair pick_pair(struct Pair pair);
+int pair_left(struct Pair *pair);
 int use_arrays(int values[2], char text[3]);
 int use_pointers(void *opaque, char *text, struct Pair *pair);
 
@@ -63,8 +68,8 @@ static long widen(int value) {
     return result;
 }
 
-struct Pair pick_pair(struct Pair pair) {
-    return pair;
+int pair_left(struct Pair *pair) {
+    return pair->left;
 }
 
 int use_arrays(int values[2], char text[3]) {
@@ -81,6 +86,15 @@ int use_pointers(void *opaque, char *text, struct Pair *pair) {
 
 int call_examples() {
     return zero() + (*zero)();
+}
+
+int condition_examples() {
+    if ("x")
+        merged_linkage_obj = merged_linkage_obj + 1;
+    if (zero)
+        merged_linkage_obj = merged_linkage_obj + 1;
+    anon_global.bits = merged_linkage_obj;
+    return anon_global.bits;
 }
 
 int declarations() {
@@ -112,8 +126,8 @@ int declarations() {
 
     pair.left = values[0];
     pair.right = total;
-    pair = pick_pair(pair);
-    node.value = pair.left + call_examples();
+    pair.right = pair.right + pair_left(&pair);
+    node.value = pair.left + call_examples() + condition_examples();
     node.next = &head;
     forward_local = &forward_value;
 
