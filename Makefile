@@ -4,8 +4,8 @@ SRCS = main.c
 OBJS = $(SRCS:%.c=$(OUT_DIR)/%.o)
 CC = cc
 CFLAGS = -Wall -Wextra -Wpedantic -std=c99 \
-	-ffreestanding -fno-stack-protector -fno-builtin \
-	-Wno-strict-prototypes -Wno-logical-op-parentheses
+	-ffreestanding -fno-builtin \
+	-Wno-strict-prototypes -Wno-logical-op-parentheses -g
 LDFLAGS = -nostdlib
 LDLIBS = -lSystem
 

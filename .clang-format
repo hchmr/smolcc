@@ -1,7 +1,14 @@
 BasedOnStyle: Google
-IndentWidth: 4
 ColumnLimit: 120
-BreakBeforeBraces: Attach
+IndentWidth: 4
+
+AlignAfterOpenBracket: true
+AlignOperands: false
+AlignTrailingComments: false
+
+AllowShortFunctionsOnASingleLine: false
 AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
-AllowShortFunctionsOnASingleLine: false
+
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeBraces: Attach
