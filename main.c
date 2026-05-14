@@ -161,7 +161,7 @@ static void assert(const char *label, int condition) {
 }
 
 static void unreachable_case(const char *label, int value) {
-    write_f2(2, "%s: case n_ot handled: %d\n", label, &value);
+    write_f2(2, "%s: case not handled: %d\n", label, &value);
     _exit(1);
 }
 
@@ -243,7 +243,7 @@ enum {
 };
 
 enum {
-    n_s_Struct = 1,
+    Ns_Struct = 1,
 };
 
 struct field {
@@ -264,7 +264,7 @@ enum {
 
 static struct sym {
     int kind;
-    int n_s;
+    int ns;
     int linkage;
     const char *name;
     struct type *type;
@@ -286,7 +286,7 @@ static int n_syms;
 
 static int sym_ns(struct sym *sym) {
     if (sym->kind == Sym_Struct)
-        return n_s_Struct;
+        return Ns_Struct;
     return 0;
 }
 
@@ -490,14 +490,14 @@ static struct type *intern_type(struct type *ty) {
     return &types[n_types++];
 }
 
-static struct type *n_ew_ptr_type(struct type *base) {
+static struct type *new_ptr_type(struct type *base) {
     struct type ty;
     ty.kind = Type_Ptr;
     ty.ptr_to = base;
     return intern_type(&ty);
 }
 
-static struct type *n_ew_array_type(struct type *base, int len) {
+static struct type *new_array_type(struct type *base, int len) {
     struct type ty;
     ty.kind = Type_Array;
     ty.ptr_to = base;
@@ -505,14 +505,14 @@ static struct type *n_ew_array_type(struct type *base, int len) {
     return intern_type(&ty);
 }
 
-static struct type *n_ew_struct_type(struct sym *sym) {
+static struct type *new_struct_type(struct sym *sym) {
     struct type ty;
     ty.kind = Type_Struct;
     ty.sym = sym;
     return intern_type(&ty);
 }
 
-static struct type *n_ew_func_type(struct type *ret_type, struct type **param_types, int n_params) {
+static struct type *new_func_type(struct type *ret_type, struct type **param_types, int n_params) {
     struct type ty;
     ty.kind = Type_Func;
     ty.ret_type = ret_type;
@@ -558,9 +558,9 @@ static void type_init() {
     int_type->kind = Type_Int;
     long_type = &types[n_types++];
     long_type->kind = Type_Long;
-    ptr_to_void = n_ew_ptr_type(void_type);
-    ptr_to_char = n_ew_ptr_type(char_type);
-    ptr_to_int = n_ew_ptr_type(int_type);
+    ptr_to_void = new_ptr_type(void_type);
+    ptr_to_char = new_ptr_type(char_type);
+    ptr_to_int = new_ptr_type(int_type);
     ptrdiff_type = long_type;
 }
 
@@ -599,14 +599,16 @@ static struct scope {
 static struct scope *curr_scope = scopes;
 
 static void enter_scope(struct pos *pos) {
-    if (curr_scope - scopes >= MAX_SCOPES)
-        error_at(pos, "too many n_ested scopes");
+    int depth = curr_scope - scopes;
+    if (depth >= MAX_SCOPES)
+        error_at(pos, "too many nested scopes");
     curr_scope++;
     curr_scope->n_syms = 0;
 }
 
 static void reenter_scope() {
-    assert("reenter_scope", curr_scope - scopes < MAX_SCOPES);
+    int depth = curr_scope - scopes;
+    assert("reenter_scope", depth < MAX_SCOPES);
     curr_scope++;
 }
 
@@ -629,23 +631,23 @@ static struct sym *add_sym(struct pos *pos, int kind, const char *name) {
     return sym;
 }
 
-static struct sym *lookup_in(struct scope *scope, int n_s, const char *name) {
+static struct sym *lookup_in(struct scope *scope, int ns, const char *name) {
     if (!name)
         return 0;
     int i = 0;
     while (i < scope->n_syms) {
         struct sym *sym = scope->syms[i];
-        if (sym_ns(sym) == n_s && sym->name == name)
+        if (sym_ns(sym) == ns && sym->name == name)
             return sym;
         i++;
     }
     return 0;
 }
 
-static struct sym *lookup(int n_s, const char *name) {
+static struct sym *lookup(int ns, const char *name) {
     struct scope *s = curr_scope;
     while (s >= scopes) {
-        struct sym *sym = lookup_in(s, n_s, name);
+        struct sym *sym = lookup_in(s, ns, name);
         if (sym)
             return sym;
         s--;
@@ -661,7 +663,7 @@ static void decl_conflict(struct pos *pos, struct sym *sym, const char *msg) {
 }
 
 static struct sym *declare_struct(struct pos *pos, const char *name, int is_def) {
-    struct sym *sym = lookup_in(curr_scope, n_s_Struct, name);
+    struct sym *sym = lookup_in(curr_scope, Ns_Struct, name);
     if (sym) {
         if (sym->kind != Sym_Struct)
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
@@ -671,7 +673,7 @@ static struct sym *declare_struct(struct pos *pos, const char *name, int is_def)
         return sym;
     }
     sym = add_sym(pos, Sym_Struct, name);
-    sym->type = n_ew_struct_type(sym);
+    sym->type = new_struct_type(sym);
     sym->is_defined = is_def;
     return sym;
 }
@@ -723,13 +725,16 @@ static struct sym *declare_global(struct pos *pos, int linkage, const char *name
     if (sym) {
         if (sym->kind != Sym_Global)
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
+        if (!type_eq(sym->type, type))
+            decl_conflict(pos, sym, "already declared with a different type");
         if (sym->linkage == Internal && linkage != Internal)
             decl_conflict(pos, sym, "already declared as static");
         if (sym->linkage != Internal && linkage == Internal)
             decl_conflict(pos, sym, "already declared as non-static");
         if (is_def && sym->is_defined)
             decl_conflict(pos, sym, "already defined");
-        decl_conflict(pos, sym, "already declared");
+        sym->is_defined = sym->is_defined | is_def;
+        return sym;
     }
     sym = add_sym(pos, Sym_Global, name);
     sym->type = type;
@@ -746,7 +751,7 @@ static struct sym *declare_func(struct pos *pos, int linkage, const char *name, 
         param_types[i] = params[i].type;
         i++;
     }
-    struct type *type = n_ew_func_type(ret_type, param_types, n_params);
+    struct type *type = new_func_type(ret_type, param_types, n_params);
 
     struct sym *sym = lookup_in(curr_scope, 0, name);
     if (sym) {
@@ -842,10 +847,10 @@ struct stmt {
     struct expr *expr;
     struct type *type;
 
-    struct stmt *n_ext;
+    struct stmt *next;
 };
 
-static struct expr *n_ew_expr(struct pos *pos, int kind, int n_args) {
+static struct expr *new_expr(struct pos *pos, int kind, int n_args) {
     struct expr *expr = alloc(sizeof(struct expr));
     expr->pos = *pos;
     expr->kind = kind;
@@ -854,20 +859,20 @@ static struct expr *n_ew_expr(struct pos *pos, int kind, int n_args) {
     return expr;
 }
 
-static struct expr *n_ew_unary_expr(struct pos *pos, int kind, struct expr *sub) {
-    struct expr *expr = n_ew_expr(pos, kind, 1);
+static struct expr *new_unary_expr(struct pos *pos, int kind, struct expr *sub) {
+    struct expr *expr = new_expr(pos, kind, 1);
     expr->subs[0] = sub;
     return expr;
 }
 
-static struct expr *n_ew_bin_expr(int kind, struct expr *lhs, struct expr *rhs) {
-    struct expr *expr = n_ew_expr(&lhs->pos, kind, 2);
+static struct expr *new_bin_expr(int kind, struct expr *lhs, struct expr *rhs) {
+    struct expr *expr = new_expr(&lhs->pos, kind, 2);
     expr->subs[0] = lhs;
     expr->subs[1] = rhs;
     return expr;
 }
 
-static struct stmt *n_ew_stmt(struct pos *pos, int kind) {
+static struct stmt *new_stmt(struct pos *pos, int kind) {
     struct stmt *stmt = alloc(sizeof(struct stmt));
     stmt->pos = *pos;
     stmt->kind = kind;
@@ -903,7 +908,7 @@ static int is_null_ptr(struct expr *expr) {
 }
 
 static struct expr *wrap_with(int kind, struct type *type, struct expr *orig) {
-    struct expr *wrapper = n_ew_expr(&orig->pos, kind, 1);
+    struct expr *wrapper = new_expr(&orig->pos, kind, 1);
     wrapper->type = type;
     wrapper->subs[0] = orig;
     return wrapper;
@@ -959,9 +964,9 @@ static struct expr *ptr_decay(struct expr *e) {
     if (is_array_type(e->type)) {
         struct type *array_type = e->type;
         struct type *elem_type = array_type->ptr_to;
-        return wrap_with(Expr_Cast, n_ew_ptr_type(elem_type), wrap_with(Expr_Addr, n_ew_ptr_type(array_type), e));
+        return wrap_with(Expr_Cast, new_ptr_type(elem_type), wrap_with(Expr_Addr, new_ptr_type(array_type), e));
     } else if (is_func_type(e->type)) {
-        return wrap_with(Expr_Addr, n_ew_ptr_type(e->type), e);
+        return wrap_with(Expr_Addr, new_ptr_type(e->type), e);
     } else {
         return e;
     }
@@ -994,13 +999,13 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (k == Expr_Chr) {
         e->type = char_type;
     } else if (k == Expr_Str) {
-        e->type = n_ew_array_type(char_type, str_len(e->str_val) + 1);
+        e->type = new_array_type(char_type, str_len(e->str_val) + 1);
     } else if (k == Expr_Ident) {
         struct sym *sym = lookup(0, e->str_val);
         if (!sym)
             error_at(&e->pos, "undefined symbol");
         if (sym->kind != Sym_Const && sym->kind != Sym_Local && sym->kind != Sym_Global && sym->kind != Sym_Func)
-            error_at(&e->pos, "symbol is n_ot a variable, function, or constant");
+            error_at(&e->pos, "symbol is not a variable, function, or constant");
         e->sym = sym;
         e->type = sym->type;
     } else if (k == Expr_PostInc || k == Expr_PostDec) {
@@ -1012,7 +1017,7 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (k == Expr_Call) {
         struct expr *callee = e->subs[0];
         if (callee->type->kind != Expr_Addr && callee->subs[0]->kind != Expr_Ident)
-            error_at(&e->pos, "called object is n_ot a function");
+            error_at(&e->pos, "called object is not a function");
         struct type *func = callee->subs[0]->sym->type;
 
         struct expr **args = &e->subs[1];
@@ -1023,25 +1028,25 @@ static struct expr *elab_expr(struct expr *e) {
             error_at(&e->pos, "too few arguments in function call");
         int i = 0;
         while (i < n_args) {
-            apply_assignment_conversion(args[i], func->param_types[i]);
+            args[i] = apply_assignment_conversion(args[i], func->param_types[i]);
             i++;
         }
         e->type = func->ret_type;
     } else if (k == Expr_Subscript) {
         e->kind = Expr_Add;
-        return elab_expr(n_ew_unary_expr(&e->pos, Expr_Deref, e));
+        return elab_expr(new_unary_expr(&e->pos, Expr_Deref, e));
     } else if (k == Expr_Member) {
         if (e->subs[0]->type->kind != Type_Struct)
-            error_at(&e->pos, "member access on n_on-struct type");
+            error_at(&e->pos, "member access on non-struct type");
         struct sym *sym = e->subs[0]->type->sym;
         struct field *field = lookup_field(sym, e->str_val);
         if (!field)
-            error_at(&e->pos, "member n_ot found in struct");
+            error_at(&e->pos, "member not found in struct");
         e->type = field->type;
     } else if (k == Expr_Addr) {
         if (!is_addressable(e->subs[0]))
             error_at(&e->pos, "operand must be addressable");
-        e->type = n_ew_ptr_type(e->subs[0]->type);
+        e->type = new_ptr_type(e->subs[0]->type);
     } else if (k == Expr_Deref) {
         if (!is_ptr_type(e->subs[0]->type))
             error_at(&e->pos, "operand must be a pointer");
@@ -1089,7 +1094,7 @@ static struct expr *elab_expr(struct expr *e) {
         }
         e->type = int_type;
     } else if (k == Expr_Lt || k == Expr_Le || k == Expr_Gt || k == Expr_Ge) {
-        if (is_arithmetic(e->subs[0]->type) || is_arithmetic(e->subs[1]->type)) {
+        if (is_arithmetic(e->subs[0]->type) && is_arithmetic(e->subs[1]->type)) {
             apply_uac(e->subs);
         } else if (is_ptr_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
             unify_ptr_operands(e->subs);
@@ -1121,7 +1126,7 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (k == Expr_Assign) {
         if (!is_assignable(e->subs[0]))
             error_at(&e->pos, "operand must be assignable");
-        apply_assignment_conversion(e->subs[1], e->subs[0]->type);
+        e->subs[1] = apply_assignment_conversion(e->subs[1], e->subs[0]->type);
         e->type = e->subs[0]->type;
     } else {
         unreachable_case("elab_expr", k);
@@ -1152,7 +1157,7 @@ static int eval_(struct expr *expr) {
         return expr->int_val;
     } else if (expr->kind == Expr_Ident) {
         if (expr->sym->kind != Sym_Const) {
-            error_at(&expr->pos, "n_ot a constant");
+            error_at(&expr->pos, "not a constant");
         }
         return expr->sym->val;
     } else if (expr->kind == Expr_Neg) {
@@ -1249,16 +1254,16 @@ static void lex() {
                     error_at(&chr_pos, "unterminated string/char literal");
                 if (delim == '\'' && tok_len != 1)
                     error_at(&chr_pos, "too many characters in char literal");
+                int decoded = chr;
                 if (chr == '\\') {
                     n_ext_chr();
                     const char *escapes = "abfnrtv\\'\"?", *unescapes = "\a\b\f\n\r\t\v\\\'\"\?";
                     if (find_chr(escapes, chr)) {
-                        n_ext_chr();
-                        tok_str[tok_len - 1] = unescapes[find_chr(escapes, chr) - escapes];
+                        decoded = unescapes[find_chr(escapes, chr) - escapes];
                     }
-                } else {
-                    n_ext_chr();
                 }
+                n_ext_chr();
+                tok_str[tok_len - 1] = decoded;
             }
             if (delim == '\'' && tok_len == 0)
                 error_at(&chr_pos, "empty char literal");
@@ -1337,7 +1342,7 @@ static const char *p_ident() {
 
 static int p_num() {
     if (tok != TokNum) {
-        unexpected_expected("n_umber");
+        unexpected_expected("number");
     }
     int res = str_to_int(tok_str);
     lex();
@@ -1398,13 +1403,13 @@ static int p_const_expr();
 
 static struct expr *p_unary_expr(struct pos *pos, int kind) {
     struct expr *res = p_expr(Prec_Unary);
-    res = n_ew_unary_expr(pos, kind, res);
+    res = new_unary_expr(pos, kind, res);
     return res;
 }
 
 static struct expr *p_bin_expr(struct expr *lhs, int kind, int rbp) {
     struct expr *rhs = p_expr(rbp);
-    return n_ew_bin_expr(kind, lhs, rhs);
+    return new_bin_expr(kind, lhs, rhs);
 }
 
 static struct expr *p_expr(int rbp) {
@@ -1415,7 +1420,7 @@ static struct expr *p_expr(int rbp) {
             struct type *type = p_typename();
             expect(")");
             struct expr *tmp = p_expr(Prec_Unary);
-            acc = n_ew_unary_expr(&pos, Expr_Cast, tmp);
+            acc = new_unary_expr(&pos, Expr_Cast, tmp);
             acc->type = type;
         } else {
             acc = p_expr(0);
@@ -1426,14 +1431,14 @@ static struct expr *p_expr(int rbp) {
     } else if (eat("!")) {
         acc = p_unary_expr(&pos, Expr_Not);
     } else if (tok == TokNum) {
-        acc = n_ew_expr(&pos, Expr_Num, 0);
+        acc = new_expr(&pos, Expr_Num, 0);
         acc->int_val = p_num();
     } else if (tok == TokStr) {
-        acc = n_ew_expr(&pos, Expr_Str, 0);
+        acc = new_expr(&pos, Expr_Str, 0);
         acc->str_val = intern(tok_str, tok_len + 1);
         lex();
     } else if (tok == TokChr) {
-        acc = n_ew_expr(&pos, Expr_Chr, 0);
+        acc = new_expr(&pos, Expr_Chr, 0);
         acc->int_val = tok_str[0];
         lex();
     } else if (eat("&")) {
@@ -1444,10 +1449,10 @@ static struct expr *p_expr(int rbp) {
         expect("(");
         struct type *type = p_typename();
         expect(")");
-        acc = n_ew_expr(&pos, Expr_Num, 0);
+        acc = new_expr(&pos, Expr_Num, 0);
         acc->int_val = type_size(type);
     } else if (tok == TokWrd) {
-        acc = n_ew_expr(&pos, Expr_Ident, 0);
+        acc = new_expr(&pos, Expr_Ident, 0);
         acc->str_val = p_ident();
         struct sym *sym = lookup(0, acc->str_val);
         if (!sym)
@@ -1464,7 +1469,7 @@ static struct expr *p_expr(int rbp) {
             struct expr *mid = p_expr(0);
             expect(":");
             struct expr *rhs = p_expr(Prec_Cond - 1);
-            struct expr *tmp = n_ew_expr(&pos, Expr_Cond, 3);
+            struct expr *tmp = new_expr(&pos, Expr_Cond, 3);
             tmp->subs[0] = acc;
             tmp->subs[1] = mid;
             tmp->subs[2] = rhs;
@@ -1509,7 +1514,7 @@ static struct expr *p_expr(int rbp) {
             acc = p_bin_expr(acc, Expr_Subscript, 0);
             expect("]");
         } else if (rbp < Prec_Postfix && eat("(")) {
-            struct expr *tmp = n_ew_expr(&pos, Expr_Call, MAX_FUNC_PARAMS + 1);
+            struct expr *tmp = new_expr(&pos, Expr_Call, MAX_FUNC_PARAMS + 1);
             tmp->subs[0] = acc;
             int n_args = 0;
             struct expr **args = &tmp->subs[1];
@@ -1523,16 +1528,16 @@ static struct expr *p_expr(int rbp) {
             tmp->n_subs = n_args + 1;
             acc = tmp;
         } else if (rbp < Prec_Postfix && eat(".")) {
-            acc = n_ew_unary_expr(&pos, Expr_Member, acc);
+            acc = new_unary_expr(&pos, Expr_Member, acc);
             acc->str_val = p_ident();
         } else if (rbp < Prec_Postfix && eat("->")) {
-            acc = n_ew_unary_expr(&pos, Expr_Deref, acc);
-            acc = n_ew_unary_expr(&pos, Expr_Member, acc);
+            acc = new_unary_expr(&pos, Expr_Deref, acc);
+            acc = new_unary_expr(&pos, Expr_Member, acc);
             acc->str_val = p_ident();
         } else if (rbp < Prec_Postfix && eat("++")) {
-            acc = n_ew_unary_expr(&pos, Expr_PostInc, acc);
+            acc = new_unary_expr(&pos, Expr_PostInc, acc);
         } else if (rbp < Prec_Postfix && eat("--")) {
-            acc = n_ew_unary_expr(&pos, Expr_PostDec, acc);
+            acc = new_unary_expr(&pos, Expr_PostDec, acc);
         } else {
             break;
         }
@@ -1548,20 +1553,20 @@ static int p_const_expr() {
 static struct stmt *p_stmt() {
     struct pos pos = tok_pos;
     if (eat("{")) {
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_Block);
+        struct stmt *stmt = new_stmt(&pos, Stmt_Block);
         if (eat("}"))
             return stmt;
         enter_scope(&pos);
         stmt->sub = p_stmt();
         struct stmt *tail = stmt->sub;
         while (!eat("}")) {
-            tail->n_ext = p_stmt();
-            tail = tail->n_ext;
+            tail->next = p_stmt();
+            tail = tail->next;
         }
         leave_scope();
         return stmt;
     } else if (eat("return")) {
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_Return);
+        struct stmt *stmt = new_stmt(&pos, Stmt_Return);
         if (!at(";"))
             stmt->expr = p_expr(0);
         expect(";");
@@ -1576,7 +1581,7 @@ static struct stmt *p_stmt() {
         }
         return stmt;
     } else if (eat("if")) {
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_If);
+        struct stmt *stmt = new_stmt(&pos, Stmt_If);
 
         expect("(");
         stmt->expr = p_expr(0);
@@ -1589,13 +1594,13 @@ static struct stmt *p_stmt() {
 
         if (eat("else")) {
             enter_scope(&pos);
-            stmt->sub->n_ext = p_stmt();
+            stmt->sub->next = p_stmt();
             leave_scope();
         }
 
         return stmt;
     } else if (eat("while")) {
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_While);
+        struct stmt *stmt = new_stmt(&pos, Stmt_While);
 
         expect("(");
         stmt->expr = p_expr(0);
@@ -1613,17 +1618,17 @@ static struct stmt *p_stmt() {
     } else if (eat("break")) {
         if (!curr_loop)
             error_at(&pos, "break statement outside loop");
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_Break);
+        struct stmt *stmt = new_stmt(&pos, Stmt_Break);
         expect(";");
         return stmt;
     } else if (eat("continue")) {
         if (!curr_loop)
             error_at(&pos, "continue statement outside loop");
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_Continue);
+        struct stmt *stmt = new_stmt(&pos, Stmt_Continue);
         expect(";");
         return stmt;
     } else if (eat(";")) {
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_Empty);
+        struct stmt *stmt = new_stmt(&pos, Stmt_Empty);
         // empty statement
         return stmt;
     } else if (at_decl()) {
@@ -1631,7 +1636,7 @@ static struct stmt *p_stmt() {
         p_decl(Decl_Local, &stmt);
         return stmt;
     } else {
-        struct stmt *stmt = n_ew_stmt(&pos, Stmt_Expr);
+        struct stmt *stmt = new_stmt(&pos, Stmt_Expr);
         stmt->expr = p_expr(0);
         elab_expr(stmt->expr);
         expect(";");
@@ -1649,7 +1654,7 @@ static struct type *p_struct() {
 
     struct sym *sym = 0;
     if (!is_def)
-        sym = lookup(n_s_Struct, name);
+        sym = lookup(Ns_Struct, name);
 
     if (is_def || !sym) {
         sym = declare_struct(&name_pos, name, is_def);
@@ -1712,7 +1717,7 @@ extern void p_decl(int scope, void *ctx) {
     if (!base_type)
         unexpected_expected("type specifier");
     if (storage_class && scope != Decl_Global)
-        error_at(&pos, "storage class specifier is n_ot allowed here");
+        error_at(&pos, "storage class specifier is not allowed here");
 
     int n_declarators = 0;
     struct stmt *prev_local = 0;
@@ -1726,7 +1731,7 @@ extern void p_decl(int scope, void *ctx) {
         struct expr *init = 0;
 
         while (eat("*")) {
-            type = n_ew_ptr_type(type);
+            type = new_ptr_type(type);
         }
 
         struct pos name_pos = tok_pos;
@@ -1751,7 +1756,7 @@ extern void p_decl(int scope, void *ctx) {
             while (eat("[")) {
                 int len = p_const_expr();
                 expect("]");
-                type = n_ew_array_type(type, len);
+                type = new_array_type(type, len);
             }
         } else if (eat("=") && (scope == Decl_Global || scope == Decl_Local)) {
             init = p_expr(0);
@@ -1763,7 +1768,7 @@ extern void p_decl(int scope, void *ctx) {
         } else if (scope == Decl_Param) {
             struct func_param *param = (struct func_param *)ctx;
             if (is_array_type(type) || is_func_type(type)) {
-                type = n_ew_ptr_type(type->ptr_to);
+                type = new_ptr_type(type->ptr_to);
             }
             if (!is_object_type(type))
                 error_at(&name_pos, "bad parameter type");
@@ -1772,11 +1777,11 @@ extern void p_decl(int scope, void *ctx) {
             define_var(&name_pos, name, type);
             return;  // max one parameter per declaration
         } else if (!name) {
-            // declaration does n_ot declare a function or object
+            // declaration does not declare a function or object
         } else if (has_params) {
             // function declaration
             if (scope != Decl_Global && scope != Decl_Local)
-                error_at(&name_pos, "function declaration is n_ot allowed here");
+                error_at(&name_pos, "function declaration is not allowed here");
             int linkage = storage_class ? (storage_class[0] == 's' ? Internal : External) : 0;
             has_func_body = scope == Decl_Global && n_declarators == 0 && at("{");
             struct sym *sym = declare_func(&name_pos, linkage, name, type, params, n_params, has_func_body);
@@ -1794,10 +1799,10 @@ extern void p_decl(int scope, void *ctx) {
                 error_at(&name_pos, "bad object type");
             if (scope == Decl_Local) {
                 if (storage_class)
-                    error_at(&name_pos, "storage class specifier is n_ot allowed/supported");
+                    error_at(&name_pos, "storage class specifier is not allowed/supported");
                 if (init)
                     chk_expr(init, type);
-                struct stmt *local = n_ew_stmt(&name_pos, Stmt_Decl);
+                struct stmt *local = new_stmt(&name_pos, Stmt_Decl);
                 local->sym = define_var(&name_pos, name, type);
                 local->expr = init;
                 if (!prev_local) {
@@ -1853,9 +1858,13 @@ int main(int argc, char **argv) {
     struct scope *scope = &scopes[0];
     int i = 0;
     while (i < scope->n_syms) {
-        struct sym *sym = scope->syms[i++];
+        struct sym *sym = scope->syms[i];
         const char *linkage_str = sym->linkage == Internal ? "internal" : "external";
         if (sym->kind == Sym_Func) {
+            if (sym->linkage != Internal && !sym->is_defined)
+                continue;  // declaration, external linkage
+            if (sym->linkage == Internal && !sym->is_defined)
+                ;  // declaration with internal linkage, missing definition
             write_f3(2, "function(name=%s, linkage=%s, n_params=%d)\n", sym->name, linkage_str, &sym->n_params);
         } else if (sym->kind == Sym_Global) {
             if (sym->linkage == External && !sym->is_defined)
@@ -1864,8 +1873,9 @@ int main(int argc, char **argv) {
                 ;  // tentative definition
             write_f3(2, "object(name=%s, linkage=%s, type=%s)\n", sym->name, linkage_str, type_str(sym->type));
         }
+        i++;
     }
-    write_f1(2, "%d functions and objects declared\n", &i);
+    write_f1(2, "%d global objects/functions defined\n", &scope->n_syms);
 
     write_f1(2, "allocated %d bytes from arena\n", &arena_len);
     write_f1(2, "allocated %d types\n", &n_types);
