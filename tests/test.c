@@ -92,7 +92,7 @@ int condition_examples() {
     return anon_global.bits;
 }
 
-int declarations() {
+int main() {
     enum {
         Local_A,
         Local_B = 7,

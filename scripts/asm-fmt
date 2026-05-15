@@ -15,12 +15,12 @@ for line in sys.stdin:
 
     if not line:
         pass
-    elif line.startswith(".") or line.endswith(":"):
+    elif line.endswith(":"):
         pass
-    elif line[0].isalnum():
+    elif re.match(r"^\.?\w", line):
         parts = line.split(None, 1)
         mnemonic = parts[0]
         operands = parts[1] if len(parts) > 1 else ""
-        line = f"    {mnemonic:<8}{operands}"
+        line = f"    {mnemonic:<7} {operands}"
 
     print(f"{line:<40}{comment}".rstrip())

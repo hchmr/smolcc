@@ -171,7 +171,7 @@ static void unreachable_case(const char *label, int value) {
 //=============================================================================
 //= arena
 
-enum { Arena_Cap = 1 * 1024 * 1024 };  // 1 MiB
+enum { Arena_Cap = 8 * 1024 * 1024 };  // 8 MiB
 static char arena[Arena_Cap];
 static int arena_len;
 
@@ -1256,7 +1256,7 @@ enum {
 };
 
 enum {
-    MAX_TOK_LEN = 256,
+    MAX_TOK_LEN = 255,
 };
 
 static int inp;
@@ -1266,8 +1266,12 @@ static int chr;
 
 static int tok;
 static struct pos tok_pos;
-static char tok_str[MAX_TOK_LEN];
+static char tok_str[MAX_TOK_LEN + 1];
 static int tok_len;
+static struct {
+    int n;
+    char str[MAX_TOK_LEN + 1];
+} tok_val;
 
 static void n_ext_chr() {
     if (chr == '\n') {
@@ -1276,7 +1280,7 @@ static void n_ext_chr() {
     } else {
         chr_pos.col++;
     }
-    if (tok_len + 1 < MAX_TOK_LEN) {
+    if (tok_len < MAX_TOK_LEN) {
         tok_str[tok_len++] = chr;
     }
     chr = read_char(inp);
@@ -1299,8 +1303,12 @@ static void lex() {
             n_ext_chr();
             continue;
         } else if (chr >= '0' && chr <= '9') {
-            while (chr >= '0' && chr <= '9')
+            int n = 0;
+            while (chr >= '0' && chr <= '9') {
+                n = n * 10 + (chr - '0');
                 n_ext_chr();
+            }
+            tok_val.n = n;
             tok = TokNum;
         } else if (chr >= 'a' && chr <= 'z' || chr >= 'A' && chr <= 'Z' || chr == '_') {
             while (chr >= 'a' && chr <= 'z' || chr >= 'A' && chr <= 'Z' || chr == '_' || chr >= '0' && chr <= '9')
@@ -1308,14 +1316,17 @@ static void lex() {
             tok = TokWrd;
         } else if (chr == '\'' || chr == '"') {
             int delim = chr;
+            int len = 0;
             n_ext_chr();
             while (1) {
                 if (chr == delim)
                     break;
                 if (chr == EOF)
                     error_at(&chr_pos, "unterminated string/char literal");
-                if (delim == '\'' && tok_len != 1)
+                if (delim == '\'' && len != 0)
                     error_at(&chr_pos, "too many characters in char literal");
+                if (len == MAX_TOK_LEN)
+                    error_at(&chr_pos, "string/char literal too long");
                 int decoded = chr;
                 if (chr == '\\') {
                     n_ext_chr();
@@ -1324,11 +1335,13 @@ static void lex() {
                         decoded = unescapes[find_chr(escapes, chr) - escapes];
                 }
                 n_ext_chr();
-                tok_str[tok_len - 1] = decoded;
+                tok_val.str[len++] = decoded;
             }
-            if (delim == '\'' && tok_len == 0)
+            if (delim == '\'' && len == 0)
                 error_at(&chr_pos, "empty char literal");
             n_ext_chr();
+            tok_val.str[len] = 0;
+            tok_val.n = len;
             tok = delim == '"' ? TokStr : TokChr;
         } else {
             tok = TokSym;
@@ -1358,13 +1371,6 @@ static void lex() {
 
 static void parse_init() {
     lex();
-}
-
-static int str_to_int(const char *s) {
-    int n = 0;
-    while (*s)
-        n = n * 10 + (*s++ - '0');
-    return n;
 }
 
 static int at(const char *t) {
@@ -1405,7 +1411,7 @@ static int p_num() {
     if (tok != TokNum) {
         unexpected_expected("number");
     }
-    int res = str_to_int(tok_str);
+    int res = tok_val.n;
     lex();
     return res;
 }
@@ -1496,11 +1502,11 @@ static struct expr *p_expr(int rbp) {
         acc->int_val = p_num();
     } else if (tok == TokStr) {
         acc = new_expr(&pos, Expr_Str, 0);
-        acc->str_val = intern(tok_str, tok_len + 1);
+        acc->str_val = intern(tok_val.str, tok_val.n + 1);
         lex();
     } else if (tok == TokChr) {
         acc = new_expr(&pos, Expr_Chr, 0);
-        acc->int_val = tok_str[0];
+        acc->int_val = tok_val.str[0];
         lex();
     } else if (eat("&")) {
         acc = p_unary_expr(&pos, Expr_Addr);
@@ -1875,8 +1881,8 @@ extern void p_decl(int scope, void *ctx) {
                 if (storage_class)
                     error_at(&name_pos, "storage class specifier is not allowed/supported");
                 if (init)
-                    chk_expr(init, type);
-                struct stmt *local = new_stmt(&name_pos, Stmt_Decl);
+                    init = chk_expr(init, type);
+                struct stmt *local = new_stmt(&pos, Stmt_Decl);
                 local->sym = define_local(&name_pos, curr_func, name, type);
                 local->expr = init;
                 if (!prev_local) {
@@ -1917,6 +1923,27 @@ extern void p_decl(int scope, void *ctx) {
 int next_loop_id;
 int next_cond_id;
 int next_label;  // general purpose label
+int next_str_id;
+
+struct emitted_str {
+    const char *str;
+    int label;
+    struct emitted_str *next;
+} *output_strs;
+
+int add_literal(const char *str) {
+    struct emitted_str *node = output_strs, *head = output_strs;
+    while (node) {
+        if (node->str == str)
+            return node->label;
+        node = node->next;
+    }
+    output_strs = alloc(sizeof(struct emitted_str));
+    output_strs->str = str;
+    output_strs->label = next_str_id++;
+    output_strs->next = head;
+    return output_strs->label;
+}
 
 static const char *get_str_op(struct type *type) {
     if (type->kind == Type_Char)
@@ -1952,44 +1979,29 @@ static void emit_scalar_data(int size, int val) {
     }
 }
 
+static void emit_str_load(const char *str) {
+    int label_id = add_literal(str);
+    write_f1(1, "adrp x0, .L.str.%d@PAGE\n", &label_id);
+    write_f1(1, "add x0, x0, .L.str.%d@PAGEOFF\n", &label_id);
+}
+
 static void emit_int_load(int val, int reg) {
-    int word_mask = (1 << 16) - 1;
+    int chunk_mask = (1 << 16) - 1;
+    int default_chunk_value = val < 0 ? chunk_mask : 0;
     int i = 0;
     while (i < 4) {
-        int shift = i * 16;
-        int chunk = val & word_mask;
+        int chunk = val & chunk_mask;
         if (i == 0) {
-            write_f2(1, "movz x%d, #%d\n", &reg, &chunk);
-        } else if (chunk) {
+            const char *mov_op = val < 0 ? "movn" : "movz";
+            chunk = val < 0 ? (chunk ^ chunk_mask) & chunk_mask : chunk;
+            write_f3(1, "%s x%d, #%d\n", mov_op, &reg, &chunk);
+        } else if (chunk != default_chunk_value) {
+            int shift = i * 16;
             write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
         }
         i++;
         val = val >> 16;
     }
-}
-
-static void emit_str_load(const char *str) {
-    // Tempoarary solution: emit at point of use
-    // TODO
-    write_str(1, ".section __TEXT,__cstring\n");
-    int label_id = next_label++;
-    write_f1(1, ".L.str.%d:\n", &label_id);
-    write_str(1, ".asciz \"");
-    int c;
-    while ((c = *str++)) {
-        if (c == '\\' || c == '"') {
-            write_f1(1, "\\%c", &c);
-        } else if (c >= 32 && c <= 126) {
-            write_f1(1, "%c", &c);
-        } else {
-            write_f1(1, "\\x%x", &c);
-        }
-    }
-    write_str(1, "\"\n");
-
-    write_str(1, ".section __TEXT,__text\n");
-    write_f1(1, "adrp x0, .L.str.%d@PAGE\n", &label_id);
-    write_f1(1, "add x0, x0, .L.str.%d@PAGEOFF\n", &label_id);
 }
 
 static void emit_obj(struct sym *sym) {
@@ -2033,24 +2045,24 @@ int layout_func(struct sym *sym) {
 static void emit_slot_write(int i, int reg) {
     struct sym *local = curr_func->locals[i];
     const char *op = get_str_op(local->type);
-    // write_f3(1, "%s%d, [fp, #%d]\n", op, &reg, &local->offset);
+    // write_f3(1, "%s%d, [x29, #%d]\n", op, &reg, &local->offset);
     emit_int_load(local->offset, 9);
-    write_f2(1, "%s%d, [fp, x9]\n", op, &reg);
+    write_f2(1, "%s%d, [x29, x9]\n", op, &reg);
 }
 
 static void emit_slot_read(int i, int reg) {
     struct sym *local = curr_func->locals[i];
     const char *op = get_ldr_op(local->type);
-    // write_f3(1, "%s%d, [fp, #%d]\n", op, &reg, &local->offset);
+    // write_f3(1, "%s%d, [x29, #%d]\n", op, &reg, &local->offset);
     emit_int_load(local->offset, 9);
-    write_f2(1, "%s%d, [fp, x9]\n", op, &reg);
+    write_f2(1, "%s%d, [x29, x9]\n", op, &reg);
 }
 
 static void emit_slot_addr(int i, int reg) {
     struct sym *local = curr_func->locals[i];
     // write_f2(1, "add x%d, sp, #%d\n", &reg, &local->offset);
     emit_int_load(local->offset, 9);
-    write_f1(1, "add x%d, fp, x9\n", &reg);
+    write_f1(1, "add x%d, x29, x9\n", &reg);
 }
 
 static void emit_push(int reg) {
@@ -2321,6 +2333,7 @@ static void emit_effect_expr(struct expr *expr) {
 }
 
 static void emit_stmt(struct stmt *stmt) {
+    write_f3(1, "// %s:%d:%d\n", stmt->pos.file, &stmt->pos.line, &stmt->pos.col);  // debug info
     int k = stmt->kind;
     if (k == Stmt_Block) {
         struct stmt *sub = stmt->sub;
@@ -2380,7 +2393,7 @@ static void emit_func(struct sym *func) {
     int slots_size = layout_func(func);
 
     write_str(1, ".text\n");
-    if (func->linkage == External)
+    if (func->linkage != Internal)
         write_f1(1, ".globl _%s\n", func->name);
     write_f1(1, "_%s:\n", func->name);
     // prologue
@@ -2414,7 +2427,31 @@ static void emit_memcpy() {
     write_str(1, "subs x2, x2, #1\n");
     write_str(1, "cbnz x2, .L._memcpy.body\n");
     write_str(1, ".L._memcpy.end:\n");
-    write_str(1, "ret\n"); // x0 still holds dest
+    write_str(1, "ret\n");  // x0 still holds dest
+}
+
+static void emit_str_literals() {
+    write_str(1, ".section __TEXT,__cstring,cstring_literals\n");
+    struct emitted_str *node = output_strs;
+    while (node) {
+        const char *str = node->str;
+        write_f1(1, ".L.str.%d:\n", &node->label);
+        write_str(1, ".asciz \"");
+        int c;
+        while ((c = *str++)) {
+            if (c == '\\' || c == '"') {
+                write_f1(1, "\\%c", &c);
+            } else if (c >= 32 && c <= 126) {
+                write_f1(1, "%c", &c);
+            } else {
+                int c1 = (c >> 4) & 15;
+                int c2 = c & 15;
+                write_f2(1, "\\x%x%x", &c1, &c2);
+            }
+        }
+        write_str(1, "\"\n");
+        node = node->next;
+    }
 }
 
 //=============================================================================
@@ -2461,6 +2498,7 @@ int main(int argc, char **argv) {
         }
     }
     emit_memcpy();
+    emit_str_literals();
 
     write_f2(2, "generated %d functions and %d objects\n", &n_funcs, &n_objs);
 
