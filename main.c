@@ -612,7 +612,7 @@ enum {
 static struct scope {
     struct sym *syms;
 } scopes[MAX_SCOPES];
-static struct scope *curr_scope = scopes;
+static struct scope *curr_scope;
 
 static void enter_scope(struct pos *pos) {
     int depth = curr_scope - scopes;
@@ -1071,9 +1071,10 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (k == Expr_Call) {
         struct expr *callee = e->subs[0];
         if (!is_ptr_type(callee->type) || callee->type->ptr_to->kind != Type_Func)
-            error_at(&e->pos, "called object is not a function");
-        struct type *func = callee->type->ptr_to;
-
+            error_at(&callee->pos, "called object is not a function");
+        if (callee->kind != Expr_Addr || callee->subs[0]->kind != Expr_Ident || callee->subs[0]->sym->kind != Sym_Func)
+            error_at(&callee->pos, "only direct function calls are supported");
+        struct type *func = callee->subs[0]->sym->type;
         struct expr **args = &e->subs[1];
         int n_args = e->n_subs - 1;
         if (n_args > func->n_params)
@@ -1240,7 +1241,7 @@ static int eval_(struct expr *expr) {
 }
 
 static int eval(struct expr *expr) {
-    return eval_(elab_expr(expr));
+    return eval_(elab_rvalue_expr(expr));
 }
 
 //=============================================================================
@@ -1704,9 +1705,6 @@ static struct stmt *p_stmt() {
         struct stmt *stmt = new_stmt(&pos, Stmt_Expr);
         stmt->expr = p_expr(0);
         stmt->expr = elab_rvalue_expr(stmt->expr);
-        // hack: ensure evaluation result fits in a register
-        if (is_struct_type(stmt->expr->type) && is_lvalue(stmt->expr))
-            stmt->expr = wrap_with(Expr_Addr, new_ptr_type(stmt->expr->type), stmt->expr);
         expect(";");
         return stmt;
     }
@@ -1888,9 +1886,10 @@ extern void p_decl(int scope, void *ctx) {
                 }
             } else if (scope == Decl_Global) {
                 int linkage = storage_class ? (storage_class[0] == 's' ? Internal : External) : 0;
-                if (init)
-                    chk_expr(init, type);
-                declare_global(&name_pos, linkage, name, type, !!init);
+                struct sym *sym = declare_global(&name_pos, linkage, name, type, !!init);
+                if (init) {
+                    sym->val = eval(init);
+                }
             } else if (scope == Decl_Struct) {
                 struct sym *sym = (struct sym *)ctx;
                 declare_field(&name_pos, sym, name, type);
@@ -1954,20 +1953,18 @@ static void emit_scalar_data(int size, int val) {
 }
 
 static void emit_int_load(int val, int reg) {
-    if (-4096 <= val && val < 4096) {
-        write_f2(1, "mov x%d, #%d\n", &reg, &val);
-    } else {
-        int i = 0;
-        while (val) {
-            int chunk = val & 65535;
-            if (i == 0) {
-                write_f2(1, "movz x%d, #%d\n", &reg, &chunk);
-            } else if (chunk) {
-                int shift = i * 16;
-                write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
-            }
-            val = val >> 16;
+    int word_mask = (1 << 16) - 1;
+    int i = 0;
+    while (i < 4) {
+        int shift = i * 16;
+        int chunk = val & word_mask;
+        if (i == 0) {
+            write_f2(1, "movz x%d, #%d\n", &reg, &chunk);
+        } else if (chunk) {
+            write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
         }
+        i++;
+        val = val >> 16;
     }
 }
 
@@ -2001,7 +1998,8 @@ static void emit_obj(struct sym *sym) {
 
     if (size <= 8) {
         write_str(1, ".section __DATA,__data\n");
-        write_f1(1, ".globl _%s\n", sym->name);
+        if (sym->linkage == External)
+            write_f1(1, ".globl _%s\n", sym->name);
         write_f1(1, ".balign %d\n", &align);
         write_f1(1, "_%s:\n", sym->name);
         if (sym->is_defined) {
@@ -2010,7 +2008,8 @@ static void emit_obj(struct sym *sym) {
             emit_scalar_data(size, 0);
         }
     } else {
-        write_f1(1, ".globl _%s\n", sym->name);
+        if (sym->linkage == External)
+            write_f1(1, ".globl _%s\n", sym->name);
         write_f3(1, ".zerofill __DATA, __bss, _%s, %d, %d\n", sym->name, &size, &align);
     }
 }
@@ -2072,28 +2071,16 @@ static void emit_store(struct type *type, int src, int dst) {
     write_f3(1, "%s%d, [x%d]\n", op, &src, &dst);
 }
 
-static void emit_memcpy(int dst, int src, int size) {
-    // x9 = src + #size
-    // loop:
-    //     tmp = *src++
-    //     *dst++ = tmp
-    // cond:
-    //     if (src != x9) goto loop
-    // end:
-    int label = next_label++;
-    write_f1(1, ".L.memcpy.%d:\n", &label);
-    write_f2(1, "add x9, x%d, #%d\n", &src, &size);
-    write_f1(1, ".L.memcpy.%d.loop:\n", &label);
-    write_f1(1, "ldr x10, [x%d], #8\n", &src);
-    write_f1(1, "str x10, [x%d], #8\n", &dst);
-    write_f1(1, ".L.memcpy.%d.cond:\n", &label);
-    write_f1(1, "cmp x%d, x9\n", &src);
-    write_f1(1, "b.ne .L.memcpy.%d.loop\n", &label);
-    write_f1(1, ".L.memcpy.%d.end:\n", &label);
+static void emit_sext(struct type *type, int reg) {
+    if (type->kind == Type_Char) {
+        write_f2(1, "sxtb x%d, x%d\n", &reg, &reg);
+    } else if (type->kind == Type_Int) {
+        write_f2(1, "sxtw x%d, x%d\n", &reg, &reg);
+    }
 }
 
 static void emit_scalar_expr(struct expr *expr);
-static void emit_addr_expr(struct expr *expr);
+static void emit_place_expr(struct expr *expr);
 
 static void emit_binary_operands(struct expr *expr) {
     emit_scalar_expr(expr->subs[0]);
@@ -2103,7 +2090,7 @@ static void emit_binary_operands(struct expr *expr) {
     emit_pop(0);
 }
 
-static void emit_short_circuit_expr(struct expr *expr, const char *cond, int invert) {
+static void emit_short_circuit_expr(struct expr *expr, const char *cond) {
     int cond_id = next_cond_id++;
     write_f1(1, ".L.cond.%d:\n", &cond_id);
     emit_scalar_expr(expr->subs[0]);
@@ -2111,14 +2098,18 @@ static void emit_short_circuit_expr(struct expr *expr, const char *cond, int inv
     emit_scalar_expr(expr->subs[1]);
     write_f1(1, ".L.cond.%d.short:\n", &cond_id);
     write_str(1, "cmp x0, #0\n");
-    write_f1(1, "cset x0, %s\n", invert ? "ne" : "eq");
+    write_str(1, "cset x0, ne\n");
     write_f1(1, ".L.cond.%d.end:\n", &cond_id);
 }
 
-static void emit_cmp_expr(struct expr *expr, const char *cond) {
+static void emit_cmp_expr(struct expr *expr, const char *cond, const char *ucond) {
     emit_binary_operands(expr);
     write_str(1, "cmp x0, x1\n");
-    write_f1(1, "cset x0, %s\n", cond);
+    if (is_ptr_type(expr->subs[0]->type)) {
+        write_f1(1, "cset x0, %s\n", ucond);
+    } else {
+        write_f1(1, "cset x0, %s\n", cond);
+    }
 }
 
 static void emit_arithmetic_expr(struct expr *expr, const char *op) {
@@ -2126,7 +2117,33 @@ static void emit_arithmetic_expr(struct expr *expr, const char *op) {
     write_f1(1, "%s x0, x0, x1\n", op);
 }
 
-static void emit_addr_expr(struct expr *expr) {
+static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
+    assert("emit_assign_to_addr", is_object_type(dst_type));
+    if (is_scalar(dst_type)) {
+        emit_push(0);
+        emit_scalar_expr(rhs);
+        write_str(1, "mov x1, x0\n");
+        emit_pop(0);
+        emit_store(dst_type, 1, 0);
+        write_str(1, "mov x0, x1\n");
+    } else {
+        emit_push(0);
+        if (rhs->kind == Expr_Assign) {
+            emit_place_expr(rhs->subs[0]);
+            emit_assign_to_addr(rhs->type, rhs->subs[1]);
+        } else {
+            if (!is_addressable(rhs))
+                unreachable_case("emit_assign_to_addr", rhs->kind);
+            emit_place_expr(rhs);
+        }
+        write_str(1, "mov x1, x0\n");
+        emit_pop(0);
+        emit_int_load(type_size(dst_type), 2);
+        write_str(1, "bl _memcpy\n");
+    }
+}
+
+static void emit_place_expr(struct expr *expr) {
     int k = expr->kind;
     if (k == Expr_Ident) {
         struct sym *sym = expr->sym;
@@ -2136,10 +2153,10 @@ static void emit_addr_expr(struct expr *expr) {
         } else if (sym->kind == Sym_Local) {
             emit_slot_addr(sym->slot_idx, 0);
         } else {
-            unreachable_case("emit_addr_expr (ident)", sym->kind);
+            unreachable_case("emit_place_expr (ident)", sym->kind);
         }
     } else if (k == Expr_Member) {
-        emit_addr_expr(expr->subs[0]);
+        emit_place_expr(expr->subs[0]);
         emit_int_load(expr->field->offset, 1);
         write_str(1, "add x0, x0, x1\n");
     } else if (k == Expr_Deref) {
@@ -2147,18 +2164,16 @@ static void emit_addr_expr(struct expr *expr) {
     } else if (k == Expr_Str) {
         emit_str_load(expr->str_val);
     } else {
-        unreachable_case("emit_addr_expr", k);
+        unreachable_case("emit_place_expr", k);
     }
 }
 
 static void emit_scalar_expr(struct expr *expr) {
     int k = expr->kind;
     if (is_lvalue(expr)) {
-        emit_addr_expr(expr);
+        emit_place_expr(expr);
         emit_load(expr->type, 0, 0);
     } else if (k == Expr_Num) {
-        emit_int_load(expr->int_val, 0);
-    } else if (k == Expr_Chr) {
         emit_int_load(expr->int_val, 0);
     } else if (k == Expr_Str) {
         emit_str_load(expr->str_val);
@@ -2167,17 +2182,17 @@ static void emit_scalar_expr(struct expr *expr) {
         int step = 1;
         if (is_ptr_type(expr->type))
             step = type_size(expr->type->ptr_to);
-        emit_addr_expr(expr->subs[0]);
-        write_str(1, "mov x1, x0\n");
-        emit_load(expr->type, 0, 1);
-        emit_int_load(step, 2);
-        write_f1(1, "%s x0, x0, x2\n", op);
-        emit_store(expr->type, 0, 1);
+        emit_place_expr(expr->subs[0]);
+        write_str(1, "mov x2, x0\n");
+        emit_load(expr->type, 0, 0);
+        emit_int_load(step, 1);
+        write_f1(1, "%s x1, x0, x1\n", op);
+        emit_store(expr->type, 1, 2);
     } else if (k == Expr_Deref) {
         emit_scalar_expr(expr->subs[0]);
         emit_load(expr->type, 0, 0);
     } else if (k == Expr_Addr) {
-        emit_addr_expr(expr->subs[0]);
+        emit_place_expr(expr->subs[0]);
     } else if (k == Expr_Not) {
         emit_scalar_expr(expr->subs[0]);
         write_str(1, "cmp x0, #0\n");
@@ -2186,7 +2201,13 @@ static void emit_scalar_expr(struct expr *expr) {
         emit_scalar_expr(expr->subs[0]);
         write_str(1, "neg x0, x0\n");
     } else if (k == Expr_Cast) {
+        // simple semantics: all operands are already 64-bit,
+        // so just truncate and re-extend if needed
         emit_scalar_expr(expr->subs[0]);
+        int target_size = type_size(expr->type);
+        if (target_size < 8) {
+            emit_sext(expr->subs[0]->type, 0);
+        }
     } else if (k == Expr_Mod) {
         emit_binary_operands(expr);
         write_str(1, "sdiv x3, x0, x1\n");
@@ -2204,17 +2225,17 @@ static void emit_scalar_expr(struct expr *expr) {
     } else if (k == Expr_Shl) {
         emit_arithmetic_expr(expr, "lsl");
     } else if (k == Expr_Ge) {
-        emit_cmp_expr(expr, "ge");
+        emit_cmp_expr(expr, "ge", "hs");
     } else if (k == Expr_Gt) {
-        emit_cmp_expr(expr, "gt");
+        emit_cmp_expr(expr, "gt", "hi");
     } else if (k == Expr_Le) {
-        emit_cmp_expr(expr, "le");
+        emit_cmp_expr(expr, "le", "ls");
     } else if (k == Expr_Lt) {
-        emit_cmp_expr(expr, "lt");
+        emit_cmp_expr(expr, "lt", "lo");
     } else if (k == Expr_Ne) {
-        emit_cmp_expr(expr, "ne");
+        emit_cmp_expr(expr, "ne", "ne");
     } else if (k == Expr_Eq) {
-        emit_cmp_expr(expr, "eq");
+        emit_cmp_expr(expr, "eq", "eq");
     } else if (k == Expr_BitAnd) {
         emit_arithmetic_expr(expr, "and");
     } else if (k == Expr_BitXor) {
@@ -2222,9 +2243,9 @@ static void emit_scalar_expr(struct expr *expr) {
     } else if (k == Expr_BitOr) {
         emit_arithmetic_expr(expr, "orr");
     } else if (k == Expr_And) {
-        emit_short_circuit_expr(expr, "z", 0);
+        emit_short_circuit_expr(expr, "z");
     } else if (k == Expr_Or) {
-        emit_short_circuit_expr(expr, "nz", 1);
+        emit_short_circuit_expr(expr, "nz");
     } else if (k == Expr_PtrAdd || k == Expr_PtrSub) {
         emit_binary_operands(expr);
         int size = type_size(expr->subs[0]->type->ptr_to);
@@ -2253,17 +2274,8 @@ static void emit_scalar_expr(struct expr *expr) {
         emit_scalar_expr(expr->subs[2]);
         write_f1(1, ".L.cond.%d.end:\n", &cond_id);
     } else if (k == Expr_Assign) {
-        emit_addr_expr(expr->subs[0]);
-        emit_push(0);
-        if (is_struct_type(expr->type)) {
-            emit_addr_expr(expr->subs[1]);
-            emit_pop(1);
-            emit_memcpy(1, 0, type_size(expr->type));
-        } else {
-            emit_scalar_expr(expr->subs[1]);
-            emit_pop(1);
-            emit_store(expr->type, 0, 1);
-        }
+        emit_place_expr(expr->subs[0]);
+        emit_assign_to_addr(expr->type, expr->subs[1]);
     } else if (k == Expr_Call) {
         struct expr *fn = expr->subs[0];
         struct expr **args = &expr->subs[1];
@@ -2274,10 +2286,6 @@ static void emit_scalar_expr(struct expr *expr) {
             func_sym = fn->subs[0]->sym;
         }
 
-        if (!func_sym) {
-            emit_scalar_expr(fn);
-            emit_push(0);
-        }
         int i = 0;
         while (i < argc) {
             emit_scalar_expr(args[i]);
@@ -2285,17 +2293,30 @@ static void emit_scalar_expr(struct expr *expr) {
             i++;
         }
         while (i > 0) {
-            emit_pop(i);
             i--;
+            emit_pop(i);
         }
-        if (func_sym) {
-            write_f1(1, "bl _%s\n", func_sym->name);
-        } else {
-            emit_pop(0);
-            write_str(1, "br x0\n");
+        write_f1(1, "bl _%s\n", func_sym->name);
+        // if calling a foreign function, we can't be sure
+        // if it will sign-extend or zero the return value.
+        if (is_scalar(expr->type) && type_size(expr->type) < 8) {
+            emit_sext(expr->type, 0);
         }
     } else {
         unreachable_case("emit_scalar_expr", k);
+    }
+}
+
+static void emit_effect_expr(struct expr *expr) {
+    if (expr->kind == Expr_Assign) {
+        emit_place_expr(expr->subs[0]);
+        emit_assign_to_addr(expr->type, expr->subs[1]);
+    } else if (is_scalar(expr->type) || is_void_type(expr->type)) {
+        emit_scalar_expr(expr);
+    } else if (is_lvalue(expr)) {
+        emit_place_expr(expr);
+    } else {
+        unreachable_case("emit_effect_expr", expr->kind);
     }
 }
 
@@ -2342,19 +2363,13 @@ static void emit_stmt(struct stmt *stmt) {
         struct stmt *decl = stmt;
         while (decl) {
             if (decl->expr) {
-                if (is_scalar(decl->expr->type)) {
-                    emit_scalar_expr(decl->expr);
-                    emit_slot_write(decl->sym->slot_idx, 0);
-                } else {
-                    emit_addr_expr(decl->expr);
-                    emit_slot_addr(decl->sym->slot_idx, 1);
-                    emit_memcpy(1, 0, type_size(decl->expr->type));
-                }
+                emit_slot_addr(decl->sym->slot_idx, 0);
+                emit_assign_to_addr(decl->sym->type, decl->expr);
             }
             decl = decl->sub;
         }
     } else if (k == Stmt_Expr) {
-        emit_scalar_expr(stmt->expr);
+        emit_effect_expr(stmt->expr);
     } else {
         unreachable_case("emit_stmt", k);
     }
@@ -2365,7 +2380,8 @@ static void emit_func(struct sym *func) {
     int slots_size = layout_func(func);
 
     write_str(1, ".text\n");
-    write_f1(1, ".globl _%s\n", func->name);
+    if (func->linkage == External)
+        write_f1(1, ".globl _%s\n", func->name);
     write_f1(1, "_%s:\n", func->name);
     // prologue
     write_str(1, "stp x29, x30, [sp, #-16]!\n");
@@ -2386,6 +2402,21 @@ static void emit_func(struct sym *func) {
     curr_func = 0;
 }
 
+static void emit_memcpy() {
+    write_str(1, ".section __TEXT,__text\n");
+    write_str(1, ".globl _memcpy\n");
+    write_str(1, "_memcpy:\n");
+    write_str(1, "mov x3, x0\n");
+    write_str(1, "cbz x2, .L._memcpy.end\n");
+    write_str(1, ".L._memcpy.body:\n");
+    write_str(1, "ldrb w4, [x1], #1\n");
+    write_str(1, "strb w4, [x3], #1\n");
+    write_str(1, "subs x2, x2, #1\n");
+    write_str(1, "cbnz x2, .L._memcpy.body\n");
+    write_str(1, ".L._memcpy.end:\n");
+    write_str(1, "ret\n"); // x0 still holds dest
+}
+
 //=============================================================================
 //= main
 
@@ -2403,6 +2434,7 @@ int main(int argc, char **argv) {
     type_init();
     lex_init(file_name);
     parse_init();
+    curr_scope = scopes;
     while (tok != EOF) {
         p_decl(Decl_Global, 0);
     }
@@ -2428,7 +2460,9 @@ int main(int argc, char **argv) {
             emit_obj(sym);
         }
     }
-    write_f2(2, "defined %d functions and %d objects\n", &n_funcs, &n_objs);
+    emit_memcpy();
+
+    write_f2(2, "generated %d functions and %d objects\n", &n_funcs, &n_objs);
 
     write_f1(2, "allocated %d bytes from arena\n", &arena_len);
     write_f1(2, "allocated %d types\n", &n_types);

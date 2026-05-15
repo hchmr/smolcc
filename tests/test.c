@@ -16,7 +16,6 @@ static int internal_counter;
 static long internal_total;
 static int merged_linkage_obj;
 extern int merged_linkage_obj;
-char *escaped = "a\n\t\?";
 int mode_default = Mode_All;
 long counts[Mode_All][2];
 
@@ -76,16 +75,12 @@ int use_arrays(int values[2], char text[3]) {
     return values[0] + text[0];
 }
 
-int use_func_pointers(int func(int)) {
-    return func(42);
+void use_func_pointers(int func(int)) {
+    // calling function pointers is not supported yet
 }
 
 int use_pointers(void *opaque, char *text, struct Pair *pair) {
     return opaque ? pair->left + text[0] : pair->right;
-}
-
-int call_examples() {
-    return zero() + (*zero)();
 }
 
 int condition_examples() {
@@ -123,11 +118,12 @@ int declarations() {
     text[1] = '\n';
     text[2] = 0;
     text[3] = *"hello";
+    char *escaped = "a\n\t\?";
 
     pair.left = values[0];
     pair.right = total;
     pair.right = pair.right + pair_left(&pair);
-    node.value = pair.left + call_examples() + condition_examples();
+    node.value = pair.left + condition_examples();
     node.next = &head;
     forward_local = &forward_value;
 
