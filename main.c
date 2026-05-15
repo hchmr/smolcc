@@ -5,6 +5,7 @@ extern int open(const char *pathname, int flags, int mode);
 extern int read(int fd, void *buf, int count);
 extern int write(int fd, const void *buf, int count);
 extern void _exit(int status);
+extern void abort();
 
 //=============================================================================
 //= io
@@ -42,11 +43,7 @@ static void write_int(int fd, long n) {
 static void write_hex(int fd, long n) {
     if (n >= 16)
         write_hex(fd, n / 16);
-    int digit = n % 16;
-    if (digit < 10)
-        write_char(fd, digit + '0');
-    else
-        write_char(fd, digit - 10 + 'a');
+    write_char(fd, "0123456789abcdef"[n % 16]);
 }
 
 // internal printf implementation supporting %d, %c, %s, and %x
@@ -59,11 +56,9 @@ static void write_f_(int fd, const char *fmt, const char **args) {
                 if (*fmt == 'd') {
                     write_int(fd, **(long **)(args++));
                 } else if (*fmt == 'x') {
-                    write_str(fd, "0x");
                     write_hex(fd, **(long **)(args++));
                 } else {
-                    write_char(fd, '%');
-                    write_char(fd, 'l');
+                    write_str(fd, "%l");
                 }
             } else if (*fmt == 'd') {
                 write_int(fd, **(int **)(args++));
@@ -148,12 +143,18 @@ static const char *find_chr(const char *s, int c) {
     return 0;
 }
 
+static void ptr_swap(void **p1, void **p2) {
+    void *tmp = *p1;
+    *p1 = *p2;
+    *p2 = tmp;
+}
+
 //=============================================================================
 //= assertions
 
 static void die(const char *label, const char *msg) {
     write_f2(2, "%s: %s\n", label, msg);
-    _exit(1);
+    abort();
 }
 
 static void assert(const char *label, int condition) {
@@ -164,7 +165,7 @@ static void assert(const char *label, int condition) {
 
 static void unreachable_case(const char *label, int value) {
     write_f2(2, "%s: case not handled: %d\n", label, &value);
-    _exit(1);
+    abort();
 }
 
 //=============================================================================
@@ -232,8 +233,9 @@ static void error_at(struct pos *pos, const char *msg) {
 
 enum {
     MAX_SYMS = 1024,
-    MAX_STRUCT_FIELDS = 16,
+    MAX_STRUCT_FIELDS = 32,
     MAX_FUNC_PARAMS = 8,
+    MAX_LOCALS = 32,
 };
 
 enum {
@@ -255,8 +257,9 @@ struct field {
 };
 
 struct func_param {
-    const char *name;
     struct type *type;
+    struct pos name_pos;
+    const char *name;
 };
 
 enum {
@@ -280,9 +283,16 @@ static struct sym {
     struct func_param params[MAX_FUNC_PARAMS];
     int n_params;
     struct stmt *body;
+    struct sym *locals[MAX_LOCALS];
+    int n_locals;
     // case Sym_Struct:
     struct field fields[MAX_STRUCT_FIELDS];
     int n_fields;
+    // case Sym_Local:
+    int slot_idx;
+    int offset;
+
+    struct sym *next;
 } syms[MAX_SYMS];
 static int n_syms;
 
@@ -596,13 +606,11 @@ static const char *type_str(struct type *ty) {
 //= symbol table
 
 enum {
-    MAX_SYMS_PER_SCOPE = 256,
     MAX_SCOPES = 256,
 };
 
 static struct scope {
-    struct sym *syms[MAX_SYMS_PER_SCOPE];
-    int n_syms;
+    struct sym *syms;
 } scopes[MAX_SCOPES];
 static struct scope *curr_scope = scopes;
 
@@ -611,7 +619,7 @@ static void enter_scope(struct pos *pos) {
     if (depth + 1 >= MAX_SCOPES)
         error_at(pos, "too many nested scopes");
     curr_scope++;
-    curr_scope->n_syms = 0;
+    curr_scope->syms = 0;
 }
 
 static void reenter_scope() {
@@ -632,9 +640,8 @@ static struct sym *add_sym(struct pos *pos, int kind, const char *name) {
     sym->kind = kind;
     sym->name = name;
     sym->last_pos = *pos;
-    if (curr_scope->n_syms >= MAX_SYMS_PER_SCOPE)
-        error_at(pos, "symbol limit reached in this scope");
-    curr_scope->syms[curr_scope->n_syms++] = sym;
+    sym->next = curr_scope->syms;
+    curr_scope->syms = sym;
 
     return sym;
 }
@@ -642,12 +649,11 @@ static struct sym *add_sym(struct pos *pos, int kind, const char *name) {
 static struct sym *lookup_in(struct scope *scope, int ns, const char *name) {
     if (!name)
         return 0;
-    int i = 0;
-    while (i < scope->n_syms) {
-        struct sym *sym = scope->syms[i];
+    struct sym *sym = scope->syms;
+    while (sym) {
         if (sym_ns(sym) == ns && sym->name == name)
             return sym;
-        i++;
+        sym = sym->next;
     }
     return 0;
 }
@@ -715,16 +721,20 @@ static struct sym *define_const(struct pos *pos, const char *name, int val) {
     return sym;
 }
 
-static struct sym *define_var(struct pos *pos, const char *name, struct type *type) {
+static struct sym *define_local(struct pos *pos, struct sym *func, const char *name, struct type *type) {
     struct sym *sym = lookup_in(curr_scope, 0, name);
     if (sym) {
         if (sym->kind != Sym_Local)
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
         decl_conflict(pos, sym, "already defined");
     }
+    if (func->n_locals >= MAX_LOCALS)
+        error_at(pos, "local variable limit reached for function");
     sym = add_sym(pos, Sym_Local, name);
     sym->type = type;
     sym->is_defined = 1;
+    sym->slot_idx = func->n_locals;
+    func->locals[func->n_locals++] = sym;
     return sym;
 }
 
@@ -803,7 +813,7 @@ static struct sym *declare_func(struct pos *pos, int linkage, const char *name, 
 //= ast
 
 enum {
-    Expr_Assign,
+    Expr_Assign = 1,
     Expr_Cond,
     Expr_Or,
     Expr_And,
@@ -828,9 +838,11 @@ enum {
     Expr_Not,
     Expr_Addr,
     Expr_Deref,
+    Expr_PtrAdd,
+    Expr_PtrSub,
+    Expr_PtrDiff,
     Expr_Ident,
     Expr_Call,
-    Expr_Subscript,
     Expr_Member,
     Expr_PostInc,
     Expr_PostDec,
@@ -850,6 +862,7 @@ struct expr {
     int n_subs;
 
     struct sym *sym;  // resolved symbol
+    struct field *field;  // resolved struct field
 };
 
 enum {
@@ -872,6 +885,8 @@ struct stmt {
     struct sym *sym;
     struct expr *expr;
     struct type *type;
+
+    int loop_id;
 
     struct stmt *next;
 };
@@ -934,10 +949,10 @@ static int is_func_expr(struct expr *expr) {
 }
 static int is_lvalue(struct expr *expr) {
     int k = expr->kind;
-    return is_var_expr(expr) || k == Expr_Deref || k == Expr_Subscript || k == Expr_Member;
+    return is_var_expr(expr) || k == Expr_Deref || k == Expr_Member;
 }
 static int is_addressable(struct expr *expr) {
-    return is_lvalue(expr) || is_func_expr(expr);
+    return is_lvalue(expr) || is_func_expr(expr) || expr->kind == Expr_Str;
 }
 static int is_assignable(struct expr *expr) {
     return is_lvalue(expr) && is_object_type(expr->type);
@@ -1006,14 +1021,6 @@ static struct expr *ptr_decay(struct expr *e) {
     }
 }
 
-static struct type *as_callable_type(struct type *t) {
-    if (is_func_type(t))
-        return t;
-    if (is_ptr_type(t) && is_func_type(t->ptr_to))
-        return t->ptr_to;
-    return 0;
-}
-
 static struct expr *elab_expr(struct expr *e);
 
 static void elab_subexprs(struct expr *e) {
@@ -1039,6 +1046,7 @@ static struct expr *elab_expr(struct expr *e) {
     if (k == Expr_Num) {
         e->type = int_type;
     } else if (k == Expr_Chr) {
+        e->kind = Expr_Num;
         e->type = char_type;
     } else if (k == Expr_Str) {
         e->type = new_array_type(char_type, str_len(e->str_val) + 1);
@@ -1050,6 +1058,10 @@ static struct expr *elab_expr(struct expr *e) {
             error_at(&e->pos, "symbol is not a variable, function, or constant");
         e->sym = sym;
         e->type = sym->type;
+        if (sym->kind == Sym_Const) {
+            e->kind = Expr_Num;
+            e->int_val = sym->val;
+        }
     } else if (k == Expr_PostInc || k == Expr_PostDec) {
         if (!is_assignable(e->subs[0]))
             error_at(&e->pos, "operand must be assignable");
@@ -1058,9 +1070,9 @@ static struct expr *elab_expr(struct expr *e) {
         e->type = e->subs[0]->type;
     } else if (k == Expr_Call) {
         struct expr *callee = e->subs[0];
-        struct type *func = as_callable_type(callee->type);
-        if (!func)
+        if (!is_ptr_type(callee->type) || callee->type->ptr_to->kind != Type_Func)
             error_at(&e->pos, "called object is not a function");
+        struct type *func = callee->type->ptr_to;
 
         struct expr **args = &e->subs[1];
         int n_args = e->n_subs - 1;
@@ -1074,9 +1086,6 @@ static struct expr *elab_expr(struct expr *e) {
             i++;
         }
         e->type = func->ret_type;
-    } else if (k == Expr_Subscript) {
-        e->kind = Expr_Add;
-        return elab_expr(new_unary_expr(&e->pos, Expr_Deref, e));
     } else if (k == Expr_Member) {
         if (e->subs[0]->type->kind != Type_Struct)
             error_at(&e->pos, "member access on non-struct type");
@@ -1084,6 +1093,7 @@ static struct expr *elab_expr(struct expr *e) {
         struct field *field = lookup_field(sym, e->str_val);
         if (!field)
             error_at(&e->pos, "member not found in struct");
+        e->field = field;
         e->type = field->type;
     } else if (k == Expr_Addr) {
         if (!is_addressable(e->subs[0]))
@@ -1105,15 +1115,20 @@ static struct expr *elab_expr(struct expr *e) {
         if (!is_scalar(e->type) || !is_scalar(e->subs[0]->type))
             error_at(&e->pos, "cast requires scalar types");
     } else if (k == Expr_Mul || k == Expr_Div || k == Expr_Mod || k == Expr_Add || k == Expr_Sub) {
+        if (k == Expr_Add && is_integer_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
+            ptr_swap((void **)&e->subs[0], (void **)&e->subs[1]);
+        }
+
         if (k == Expr_Add && is_ptr_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
+            e->kind = Expr_PtrAdd;
             e->type = e->subs[0]->type;
-        } else if (k == Expr_Add && is_integer_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            e->type = e->subs[1]->type;
         } else if (k == Expr_Sub && is_ptr_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
+            e->kind = Expr_PtrSub;
             e->type = e->subs[0]->type;
         } else if (k == Expr_Sub && is_ptr_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
             if (!type_eq(e->subs[0]->type, e->subs[1]->type))
                 error_at(&e->pos, "pointer types must match");
+            e->kind = Expr_PtrDiff;
             e->type = ptrdiff_type;
         } else if (is_arithmetic(e->subs[0]->type) && is_arithmetic(e->subs[1]->type)) {
             apply_uac(e->subs);
@@ -1556,7 +1571,8 @@ static struct expr *p_expr(int rbp) {
         } else if (rbp < Prec_Mul && eat("%")) {
             acc = p_bin_expr(acc, Expr_Mod, Prec_Mul);
         } else if (rbp < Prec_Postfix && eat("[")) {
-            acc = p_bin_expr(acc, Expr_Subscript, 0);
+            acc = p_bin_expr(acc, Expr_Add, 0);
+            acc = new_unary_expr(&pos, Expr_Deref, acc);
             expect("]");
         } else if (rbp < Prec_Postfix && eat("(")) {
             struct expr *tmp = new_expr(&pos, Expr_Call, MAX_FUNC_PARAMS + 1);
@@ -1664,12 +1680,14 @@ static struct stmt *p_stmt() {
         if (!curr_loop)
             error_at(&pos, "break statement outside loop");
         struct stmt *stmt = new_stmt(&pos, Stmt_Break);
+        stmt->sub = curr_loop;
         expect(";");
         return stmt;
     } else if (eat("continue")) {
         if (!curr_loop)
             error_at(&pos, "continue statement outside loop");
         struct stmt *stmt = new_stmt(&pos, Stmt_Continue);
+        stmt->sub = curr_loop;
         expect(";");
         return stmt;
     } else if (eat(";")) {
@@ -1685,7 +1703,10 @@ static struct stmt *p_stmt() {
     } else {
         struct stmt *stmt = new_stmt(&pos, Stmt_Expr);
         stmt->expr = p_expr(0);
-        elab_expr(stmt->expr);
+        stmt->expr = elab_rvalue_expr(stmt->expr);
+        // hack: ensure evaluation result fits in a register
+        if (is_struct_type(stmt->expr->type) && is_lvalue(stmt->expr))
+            stmt->expr = wrap_with(Expr_Addr, new_ptr_type(stmt->expr->type), stmt->expr);
         expect(";");
         return stmt;
     }
@@ -1823,8 +1844,8 @@ extern void p_decl(int scope, void *ctx) {
             if (!is_allowed_func_param_type(type))
                 error_at(&name_pos, "bad parameter type");
             param->type = type;
+            param->name_pos = name_pos;
             param->name = name;
-            define_var(&name_pos, name, type);
             return;  // max one parameter per declaration
         } else if (!name) {
             // declaration does not declare a function or object
@@ -1837,7 +1858,12 @@ extern void p_decl(int scope, void *ctx) {
             struct sym *sym = declare_func(&name_pos, linkage, name, type->ret_type, params, n_params, has_func_body);
             if (has_func_body) {
                 reenter_scope();
+                int i = 0;
                 curr_func = sym;
+                while (i < n_params) {
+                    define_local(&params[i].name_pos, curr_func, params[i].name, params[i].type);
+                    i++;
+                }
                 sym->body = p_stmt();
                 curr_func = 0;
                 leave_scope();
@@ -1853,7 +1879,7 @@ extern void p_decl(int scope, void *ctx) {
                 if (init)
                     chk_expr(init, type);
                 struct stmt *local = new_stmt(&name_pos, Stmt_Decl);
-                local->sym = define_var(&name_pos, name, type);
+                local->sym = define_local(&name_pos, curr_func, name, type);
                 local->expr = init;
                 if (!prev_local) {
                     prev_local = *(struct stmt **)ctx = local;
@@ -1886,6 +1912,483 @@ extern void p_decl(int scope, void *ctx) {
     }
 }
 
+//=============================================================================
+//= codegen
+
+int next_loop_id;
+int next_cond_id;
+int next_label;  // general purpose label
+
+static const char *get_str_op(struct type *type) {
+    if (type->kind == Type_Char)
+        return "strb w";
+    else if (type->kind == Type_Int)
+        return "str w";
+    else if (type->kind == Type_Long || type->kind == Type_Ptr)
+        return "str x";
+    else
+        unreachable_case("get_str_op", type->kind);
+}
+
+static const char *get_ldr_op(struct type *type) {
+    if (type->kind == Type_Char)
+        return "ldrsb x";
+    else if (type->kind == Type_Int)
+        return "ldrsw x";
+    else if (type->kind == Type_Long || type->kind == Type_Ptr)
+        return "ldr x";
+    else
+        unreachable_case("get_ldr_op", type->kind);
+}
+
+static void emit_scalar_data(int size, int val) {
+    if (size == 1) {
+        write_f1(1, ".byte %d\n", &val);
+    } else if (size == 4) {
+        write_f1(1, ".long %d\n", &val);
+    } else if (size == 8) {
+        write_f1(1, ".quad %d\n", &val);
+    } else {
+        unreachable_case("emit_data_scalar", size);
+    }
+}
+
+static void emit_int_load(int val, int reg) {
+    if (-4096 <= val && val < 4096) {
+        write_f2(1, "mov x%d, #%d\n", &reg, &val);
+    } else {
+        int i = 0;
+        while (val) {
+            int chunk = val & 65535;
+            if (i == 0) {
+                write_f2(1, "movz x%d, #%d\n", &reg, &chunk);
+            } else if (chunk) {
+                int shift = i * 16;
+                write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
+            }
+            val = val >> 16;
+        }
+    }
+}
+
+static void emit_str_load(const char *str) {
+    // Tempoarary solution: emit at point of use
+    // TODO
+    write_str(1, ".section __TEXT,__cstring\n");
+    int label_id = next_label++;
+    write_f1(1, ".L.str.%d:\n", &label_id);
+    write_str(1, ".asciz \"");
+    int c;
+    while ((c = *str++)) {
+        if (c == '\\' || c == '"') {
+            write_f1(1, "\\%c", &c);
+        } else if (c >= 32 && c <= 126) {
+            write_f1(1, "%c", &c);
+        } else {
+            write_f1(1, "\\x%x", &c);
+        }
+    }
+    write_str(1, "\"\n");
+
+    write_str(1, ".section __TEXT,__text\n");
+    write_f1(1, "adrp x0, .L.str.%d@PAGE\n", &label_id);
+    write_f1(1, "add x0, x0, .L.str.%d@PAGEOFF\n", &label_id);
+}
+
+static void emit_obj(struct sym *sym) {
+    int size, align;
+    type_layout(sym->type, &size, &align);
+
+    if (size <= 8) {
+        write_str(1, ".section __DATA,__data\n");
+        write_f1(1, ".globl _%s\n", sym->name);
+        write_f1(1, ".balign %d\n", &align);
+        write_f1(1, "_%s:\n", sym->name);
+        if (sym->is_defined) {
+            emit_scalar_data(size, sym->val);
+        } else {
+            emit_scalar_data(size, 0);
+        }
+    } else {
+        write_f1(1, ".globl _%s\n", sym->name);
+        write_f3(1, ".zerofill __DATA, __bss, _%s, %d, %d\n", sym->name, &size, &align);
+    }
+}
+
+int layout_func(struct sym *sym) {
+    int slots_size = 0;
+    int i = 0;
+    while (i < sym->n_locals) {
+        struct sym *local = sym->locals[i];
+        int size, align;
+        type_layout(local->type, &size, &align);
+        local->offset = -align_up(slots_size + size, align);
+        slots_size = -local->offset;
+        i++;
+    }
+
+    slots_size = align_up(slots_size, 16);
+    return slots_size;
+}
+
+static void emit_slot_write(int i, int reg) {
+    struct sym *local = curr_func->locals[i];
+    const char *op = get_str_op(local->type);
+    // write_f3(1, "%s%d, [fp, #%d]\n", op, &reg, &local->offset);
+    emit_int_load(local->offset, 9);
+    write_f2(1, "%s%d, [fp, x9]\n", op, &reg);
+}
+
+static void emit_slot_read(int i, int reg) {
+    struct sym *local = curr_func->locals[i];
+    const char *op = get_ldr_op(local->type);
+    // write_f3(1, "%s%d, [fp, #%d]\n", op, &reg, &local->offset);
+    emit_int_load(local->offset, 9);
+    write_f2(1, "%s%d, [fp, x9]\n", op, &reg);
+}
+
+static void emit_slot_addr(int i, int reg) {
+    struct sym *local = curr_func->locals[i];
+    // write_f2(1, "add x%d, sp, #%d\n", &reg, &local->offset);
+    emit_int_load(local->offset, 9);
+    write_f1(1, "add x%d, fp, x9\n", &reg);
+}
+
+static void emit_push(int reg) {
+    write_f1(1, "str x%d, [sp, #-16]!\n", &reg);
+}
+
+static void emit_pop(int reg) {
+    write_f1(1, "ldr x%d, [sp], #16\n", &reg);
+}
+
+static void emit_load(struct type *type, int dst, int src) {
+    const char *op = get_ldr_op(type);
+    write_f3(1, "%s%d, [x%d]\n", op, &dst, &src);
+}
+
+static void emit_store(struct type *type, int src, int dst) {
+    const char *op = get_str_op(type);
+    write_f3(1, "%s%d, [x%d]\n", op, &src, &dst);
+}
+
+static void emit_memcpy(int dst, int src, int size) {
+    // x9 = src + #size
+    // loop:
+    //     tmp = *src++
+    //     *dst++ = tmp
+    // cond:
+    //     if (src != x9) goto loop
+    // end:
+    int label = next_label++;
+    write_f1(1, ".L.memcpy.%d:\n", &label);
+    write_f2(1, "add x9, x%d, #%d\n", &src, &size);
+    write_f1(1, ".L.memcpy.%d.loop:\n", &label);
+    write_f1(1, "ldr x10, [x%d], #8\n", &src);
+    write_f1(1, "str x10, [x%d], #8\n", &dst);
+    write_f1(1, ".L.memcpy.%d.cond:\n", &label);
+    write_f1(1, "cmp x%d, x9\n", &src);
+    write_f1(1, "b.ne .L.memcpy.%d.loop\n", &label);
+    write_f1(1, ".L.memcpy.%d.end:\n", &label);
+}
+
+static void emit_scalar_expr(struct expr *expr);
+static void emit_addr_expr(struct expr *expr);
+
+static void emit_binary_operands(struct expr *expr) {
+    emit_scalar_expr(expr->subs[0]);
+    emit_push(0);
+    emit_scalar_expr(expr->subs[1]);
+    write_str(1, "mov x1, x0\n");
+    emit_pop(0);
+}
+
+static void emit_short_circuit_expr(struct expr *expr, const char *cond, int invert) {
+    int cond_id = next_cond_id++;
+    write_f1(1, ".L.cond.%d:\n", &cond_id);
+    emit_scalar_expr(expr->subs[0]);
+    write_f2(1, "cb%s x0, .L.cond.%d.short\n", cond, &cond_id);
+    emit_scalar_expr(expr->subs[1]);
+    write_f1(1, ".L.cond.%d.short:\n", &cond_id);
+    write_str(1, "cmp x0, #0\n");
+    write_f1(1, "cset x0, %s\n", invert ? "ne" : "eq");
+    write_f1(1, ".L.cond.%d.end:\n", &cond_id);
+}
+
+static void emit_cmp_expr(struct expr *expr, const char *cond) {
+    emit_binary_operands(expr);
+    write_str(1, "cmp x0, x1\n");
+    write_f1(1, "cset x0, %s\n", cond);
+}
+
+static void emit_arithmetic_expr(struct expr *expr, const char *op) {
+    emit_binary_operands(expr);
+    write_f1(1, "%s x0, x0, x1\n", op);
+}
+
+static void emit_addr_expr(struct expr *expr) {
+    int k = expr->kind;
+    if (k == Expr_Ident) {
+        struct sym *sym = expr->sym;
+        if (sym->kind == Sym_Global || sym->kind == Sym_Func) {
+            write_f1(1, "adrp x0, _%s@PAGE\n", sym->name);
+            write_f1(1, "add x0, x0, _%s@PAGEOFF\n", sym->name);
+        } else if (sym->kind == Sym_Local) {
+            emit_slot_addr(sym->slot_idx, 0);
+        } else {
+            unreachable_case("emit_addr_expr (ident)", sym->kind);
+        }
+    } else if (k == Expr_Member) {
+        emit_addr_expr(expr->subs[0]);
+        emit_int_load(expr->field->offset, 1);
+        write_str(1, "add x0, x0, x1\n");
+    } else if (k == Expr_Deref) {
+        emit_scalar_expr(expr->subs[0]);
+    } else if (k == Expr_Str) {
+        emit_str_load(expr->str_val);
+    } else {
+        unreachable_case("emit_addr_expr", k);
+    }
+}
+
+static void emit_scalar_expr(struct expr *expr) {
+    int k = expr->kind;
+    if (is_lvalue(expr)) {
+        emit_addr_expr(expr);
+        emit_load(expr->type, 0, 0);
+    } else if (k == Expr_Num) {
+        emit_int_load(expr->int_val, 0);
+    } else if (k == Expr_Chr) {
+        emit_int_load(expr->int_val, 0);
+    } else if (k == Expr_Str) {
+        emit_str_load(expr->str_val);
+    } else if (k == Expr_PostDec || k == Expr_PostInc) {
+        const char *op = k == Expr_PostInc ? "add" : "sub";
+        int step = 1;
+        if (is_ptr_type(expr->type))
+            step = type_size(expr->type->ptr_to);
+        emit_addr_expr(expr->subs[0]);
+        write_str(1, "mov x1, x0\n");
+        emit_load(expr->type, 0, 1);
+        emit_int_load(step, 2);
+        write_f1(1, "%s x0, x0, x2\n", op);
+        emit_store(expr->type, 0, 1);
+    } else if (k == Expr_Deref) {
+        emit_scalar_expr(expr->subs[0]);
+        emit_load(expr->type, 0, 0);
+    } else if (k == Expr_Addr) {
+        emit_addr_expr(expr->subs[0]);
+    } else if (k == Expr_Not) {
+        emit_scalar_expr(expr->subs[0]);
+        write_str(1, "cmp x0, #0\n");
+        write_str(1, "cset x0, eq\n");
+    } else if (k == Expr_Neg) {
+        emit_scalar_expr(expr->subs[0]);
+        write_str(1, "neg x0, x0\n");
+    } else if (k == Expr_Cast) {
+        emit_scalar_expr(expr->subs[0]);
+    } else if (k == Expr_Mod) {
+        emit_binary_operands(expr);
+        write_str(1, "sdiv x3, x0, x1\n");
+        write_str(1, "msub x0, x3, x1, x0\n");
+    } else if (k == Expr_Div) {
+        emit_arithmetic_expr(expr, "sdiv");
+    } else if (k == Expr_Mul) {
+        emit_arithmetic_expr(expr, "mul");
+    } else if (k == Expr_Sub) {
+        emit_arithmetic_expr(expr, "sub");
+    } else if (k == Expr_Add) {
+        emit_arithmetic_expr(expr, "add");
+    } else if (k == Expr_Shr) {
+        emit_arithmetic_expr(expr, "asr");
+    } else if (k == Expr_Shl) {
+        emit_arithmetic_expr(expr, "lsl");
+    } else if (k == Expr_Ge) {
+        emit_cmp_expr(expr, "ge");
+    } else if (k == Expr_Gt) {
+        emit_cmp_expr(expr, "gt");
+    } else if (k == Expr_Le) {
+        emit_cmp_expr(expr, "le");
+    } else if (k == Expr_Lt) {
+        emit_cmp_expr(expr, "lt");
+    } else if (k == Expr_Ne) {
+        emit_cmp_expr(expr, "ne");
+    } else if (k == Expr_Eq) {
+        emit_cmp_expr(expr, "eq");
+    } else if (k == Expr_BitAnd) {
+        emit_arithmetic_expr(expr, "and");
+    } else if (k == Expr_BitXor) {
+        emit_arithmetic_expr(expr, "eor");
+    } else if (k == Expr_BitOr) {
+        emit_arithmetic_expr(expr, "orr");
+    } else if (k == Expr_And) {
+        emit_short_circuit_expr(expr, "z", 0);
+    } else if (k == Expr_Or) {
+        emit_short_circuit_expr(expr, "nz", 1);
+    } else if (k == Expr_PtrAdd || k == Expr_PtrSub) {
+        emit_binary_operands(expr);
+        int size = type_size(expr->subs[0]->type->ptr_to);
+        const char *op = k == Expr_PtrAdd ? "add" : "sub";
+        if (size != 1) {
+            emit_int_load(size, 2);
+            write_str(1, "mul x1, x1, x2\n");
+        }
+        write_f1(1, "%s x0, x0, x1\n", op);
+    } else if (k == Expr_PtrDiff) {
+        emit_binary_operands(expr);
+        int size = type_size(expr->subs[0]->type->ptr_to);
+        write_str(1, "sub x0, x0, x1\n");
+        if (size != 1) {
+            emit_int_load(size, 1);
+            write_str(1, "sdiv x0, x0, x1\n");
+        }
+    } else if (k == Expr_Cond) {
+        int cond_id = next_cond_id++;
+        write_f1(1, ".L.cond.%d:\n", &cond_id);
+        emit_scalar_expr(expr->subs[0]);
+        write_f1(1, "cbz x0, .L.cond.%d.else\n", &cond_id);
+        emit_scalar_expr(expr->subs[1]);
+        write_f1(1, "b .L.cond.%d.end\n", &cond_id);
+        write_f1(1, ".L.cond.%d.else:\n", &cond_id);
+        emit_scalar_expr(expr->subs[2]);
+        write_f1(1, ".L.cond.%d.end:\n", &cond_id);
+    } else if (k == Expr_Assign) {
+        emit_addr_expr(expr->subs[0]);
+        emit_push(0);
+        if (is_struct_type(expr->type)) {
+            emit_addr_expr(expr->subs[1]);
+            emit_pop(1);
+            emit_memcpy(1, 0, type_size(expr->type));
+        } else {
+            emit_scalar_expr(expr->subs[1]);
+            emit_pop(1);
+            emit_store(expr->type, 0, 1);
+        }
+    } else if (k == Expr_Call) {
+        struct expr *fn = expr->subs[0];
+        struct expr **args = &expr->subs[1];
+        int argc = expr->n_subs - 1;
+
+        struct sym *func_sym = 0;
+        if (fn->kind == Expr_Addr && fn->subs[0]->kind == Expr_Ident && fn->subs[0]->sym->kind == Sym_Func) {
+            func_sym = fn->subs[0]->sym;
+        }
+
+        if (!func_sym) {
+            emit_scalar_expr(fn);
+            emit_push(0);
+        }
+        int i = 0;
+        while (i < argc) {
+            emit_scalar_expr(args[i]);
+            emit_push(0);
+            i++;
+        }
+        while (i > 0) {
+            emit_pop(i);
+            i--;
+        }
+        if (func_sym) {
+            write_f1(1, "bl _%s\n", func_sym->name);
+        } else {
+            emit_pop(0);
+            write_str(1, "br x0\n");
+        }
+    } else {
+        unreachable_case("emit_scalar_expr", k);
+    }
+}
+
+static void emit_stmt(struct stmt *stmt) {
+    int k = stmt->kind;
+    if (k == Stmt_Block) {
+        struct stmt *sub = stmt->sub;
+        while (sub) {
+            emit_stmt(sub);
+            sub = sub->next;
+        }
+    } else if (k == Stmt_Return) {
+        if (stmt->expr)
+            emit_scalar_expr(stmt->expr);
+        write_f1(1, "b .L.return.%s\n", curr_func->name);
+    } else if (k == Stmt_If) {
+        int cond_id = next_cond_id++;
+        write_f1(1, ".L.if.%d:\n", &cond_id);  // debug label
+        emit_scalar_expr(stmt->expr);
+        write_f1(1, "cbz x0, .L.if.%d.else\n", &cond_id);
+        emit_stmt(stmt->sub);
+        write_f1(1, "b .L.if.%d.end\n", &cond_id);
+        write_f1(1, ".L.if.%d.else:\n", &cond_id);
+        if (stmt->sub->next)
+            emit_stmt(stmt->sub->next);
+        write_f1(1, ".L.if.%d.end:\n", &cond_id);
+    } else if (k == Stmt_While) {
+        stmt->loop_id = next_loop_id++;
+        write_f1(1, ".L.loop.%d:\n", &stmt->loop_id);  // debug label
+        write_f1(1, "b .L.loop.%d.cond\n", &stmt->loop_id);
+        write_f1(1, ".L.loop.%d.body:\n", &stmt->loop_id);
+        emit_stmt(stmt->sub);
+        write_f1(1, ".L.loop.%d.cond:\n", &stmt->loop_id);
+        emit_scalar_expr(stmt->expr);
+        write_f1(1, "cbnz x0, .L.loop.%d.body\n", &stmt->loop_id);
+        write_f1(1, ".L.loop.%d.end:\n", &stmt->loop_id);
+    } else if (k == Stmt_Break) {
+        write_f1(1, "b .L.loop.%d.end\n", &stmt->sub->loop_id);
+    } else if (k == Stmt_Continue) {
+        write_f1(1, "b .L.loop.%d.cond\n", &stmt->sub->loop_id);
+    } else if (k == Stmt_Empty) {
+        // pass
+    } else if (k == Stmt_Decl) {
+        struct stmt *decl = stmt;
+        while (decl) {
+            if (decl->expr) {
+                if (is_scalar(decl->expr->type)) {
+                    emit_scalar_expr(decl->expr);
+                    emit_slot_write(decl->sym->slot_idx, 0);
+                } else {
+                    emit_addr_expr(decl->expr);
+                    emit_slot_addr(decl->sym->slot_idx, 1);
+                    emit_memcpy(1, 0, type_size(decl->expr->type));
+                }
+            }
+            decl = decl->sub;
+        }
+    } else if (k == Stmt_Expr) {
+        emit_scalar_expr(stmt->expr);
+    } else {
+        unreachable_case("emit_stmt", k);
+    }
+}
+
+static void emit_func(struct sym *func) {
+    curr_func = func;
+    int slots_size = layout_func(func);
+
+    write_str(1, ".text\n");
+    write_f1(1, ".globl _%s\n", func->name);
+    write_f1(1, "_%s:\n", func->name);
+    // prologue
+    write_str(1, "stp x29, x30, [sp, #-16]!\n");
+    write_str(1, "mov x29, sp\n");
+    write_f1(1, "sub sp, sp, #%d\n", &slots_size);
+    int i = 0;
+    while (i < func->type->n_params) {
+        emit_slot_write(i, i);
+        i++;
+    }
+    // body
+    emit_stmt(func->body);
+    // epilogue
+    write_f1(1, ".L.return.%s:\n", func->name);
+    write_str(1, "mov sp, x29\n");
+    write_str(1, "ldp x29, x30, [sp], #16\n");
+    write_str(1, "ret\n");
+    curr_func = 0;
+}
+
+//=============================================================================
+//= main
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         write_f1(2, "usage: %s <source-file>\n", argv[0]);
@@ -1906,25 +2409,23 @@ int main(int argc, char **argv) {
 
     // list objects and functions
     struct scope *scope = &scopes[0];
-    int i = 0;
     int n_funcs = 0, n_objs = 0;
-    while (i < scope->n_syms) {
-        struct sym *sym = scope->syms[i++];
-        const char *linkage_str = sym->linkage == Internal ? "internal" : "external";
+    struct sym *it = scope->syms;
+    while (it) {
+        struct sym *sym = it;
+        it = it->next;
         if (sym->kind == Sym_Func) {
             if (sym->linkage != Internal && !sym->is_defined)
                 continue;  // declaration, external linkage
             if (sym->linkage == Internal && !sym->is_defined)
                 continue;  // declaration with internal linkage, missing definition
-            write_f3(2, "function(name=%s, linkage=%s, n_params=%d)\n", sym->name, linkage_str, &sym->n_params);
-            n_funcs++;
+            emit_func(sym);
         } else if (sym->kind == Sym_Global) {
             if (sym->linkage == External && !sym->is_defined)
                 continue;  // declaration, external linkage
             if (!sym->is_defined)
                 ;  // tentative definition
-            write_f3(2, "object(name=%s, linkage=%s, type=%s)\n", sym->name, linkage_str, type_str(sym->type));
-            n_objs++;
+            emit_obj(sym);
         }
     }
     write_f2(2, "defined %d functions and %d objects\n", &n_funcs, &n_objs);
