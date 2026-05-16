@@ -1,3 +1,5 @@
+//# mode: run
+//# exit: 24
 struct point {
     int x;
     int y;

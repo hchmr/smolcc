@@ -1,75 +1,228 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 
-set -Eeuo pipefail
+import argparse
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
 
-make
 
-temp_files=()
-nfailures=0
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+RESET = "\033[0m"
 
-cleanup() {
-    if ((${#temp_files[@]})); then
-        rm -f -- "${temp_files[@]}"
-    fi
-}
 
-trap cleanup EXIT
+@dataclass
+class spec:
+    mode: str | None
+    exit_code: int | None
+    stderr: str | None
+    stdout: str | None
+    body: str
 
-tmpfile() {
-    local file
-    file="$(mktemp)"
-    temp_files+=("$file")
-    printf '%s\n' "$file"
-}
 
-run() {
-    local file="$1"
-    local expected_status="${2:-0}"
+def parse_directive(line: str) -> tuple[str, str] | None:
+    match = re.fullmatch(r"\s*//\s*#\s*(mode|exit|stderr|stdout)\s*:\s?(.*)", line)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
 
-    local stderr_path
-    stderr_path="$(tmpfile)"
 
-    printf '==> %s ' "$file"
+def read_spec(path: Path) -> spec:
+    lines = path.read_text().splitlines(keepends=True)
 
-    local status=0
-    if ./out/ucc "$file" >/dev/null 2>"$stderr_path"; then
-        status=0
-    else
-        status=$?
-    fi
+    mode = None
+    exit_code = None
+    stderr_parts: list[str] = []
+    stdout_parts: list[str] = []
+    body_parts: list[str] = []
+    for raw_line in lines:
+        directive = parse_directive(raw_line.rstrip("\n"))
 
-    if [[ $status -ne $expected_status ]]; then
-        printf '\033[31mFAIL\033[0m\n'
-        printf 'Expected exit status: %d\n' "$expected_status"
-        printf 'Actual exit status:   %d\n' "$status"
+        match directive:
+            case ("mode", value) if mode is None:
+                if value not in {"compile-only", "run"}:
+                    raise SystemExit(f"{path}: unsupported test mode {value!r}")
+                mode = value
+            case ("exit", value) if exit_code is None:
+                exit_code = int(value)
+            case ("stderr", value):
+                stderr_parts.append(value)
+            case ("stdout", value):
+                stdout_parts.append(value)
+            case _:
+                body_parts.append(raw_line)
 
-        if [[ -s "$stderr_path" ]]; then
-            printf '\nstderr:\n'
-            cat "$stderr_path"
-        fi
+    return spec(
+        mode=mode,
+        exit_code=exit_code,
+        stderr="\n".join(stderr_parts) if stderr_parts else None,
+        stdout="\n".join(stdout_parts) if stdout_parts else None,
+        body="".join(body_parts),
+    )
 
-        (( nfailures+=1 ))
-    else
-        printf '\033[32mOK\033[0m\n'
-    fi
-}
 
-run_group() {
-    local expected_status="$1"
-    shift
+def format_output(prefix: str, text: str) -> list[str]:
+    if not text:
+        return []
+    return [f"{prefix}{line}\n" for line in text.splitlines()]
 
-    local file
-    for file in "$@"; do
-        [[ -e "$file" ]] || continue
-        run "$file" "$expected_status"
-    done
-}
 
-run_group 0 main.c tests/*.c
-run_group 1 tests/bad/*.c
+def update_spec(
+    path: Path, spec: spec, result: subprocess.CompletedProcess[str]
+) -> None:
+    lines: list[str] = []
+    if spec.mode is not None:
+        lines.append(f"//# mode: {spec.mode}\n")
+    lines.append(f"//# exit: {result.returncode}\n")
+    lines.extend(format_output("//# stderr: ", result.stderr))
+    if spec.stdout is not None:
+        lines.extend(format_output("//# stdout: ", result.stdout))
+    lines.append(spec.body)
+    path.write_text("".join(lines))
 
-if [[ $nfailures -eq 0 ]]; then
-    printf '\nAll tests passed!\n'
-else
-    printf '\n%d test(s) failed!\n' "$nfailures"
-fi
+
+def print_text_block(label: str, text: str) -> None:
+    print(f"\n{label}:")
+    if text:
+        print(text, end="" if text.endswith("\n") else "\n")
+    else:
+        print("<empty>")
+
+
+def default_exit_for(path: Path) -> int:
+    return 1 if "bad" in path.parts else 0
+
+
+def run_command(
+    path: Path, mode: str, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    if mode == "run":
+        return subprocess.run(
+            ["./scripts/run", str(path)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="ucc-test-", dir=os.environ.get("TMPDIR") or None
+    ) as temp_dir:
+        output_path = Path(temp_dir) / "a.o"
+        return subprocess.run(
+            ["./scripts/compile", "-c", "-o", str(output_path), str(path)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+
+def collect_case_groups(paths: list[Path]) -> list[list[Path]]:
+    if paths:
+        return [paths]
+    return [
+        sorted(Path("tests").glob("*.c")),
+        sorted(Path("tests/bad").glob("*.c")),
+    ]
+
+
+def run_case(path: Path, update: bool) -> bool:
+    print(f"==> {path} ", end="", flush=True)
+
+    spec = read_spec(path)
+    mode = spec.mode or "compile-only"
+    env = os.environ.copy()
+    env["UCC_SKIP_MAKE"] = "1"
+    result = run_command(path, mode, env)
+
+    if update:
+        update_spec(path, spec, result)
+        print(f"{YELLOW}UPDATED{RESET}")
+        return True
+
+    want_exit = spec.exit_code
+    if want_exit is None:
+        want_exit = default_exit_for(path)
+
+    output_failures: list[tuple[str, str, str]] = []
+    actual_stderr = result.stderr.rstrip('\n')
+    actual_stdout = result.stdout.rstrip('\n')
+    if spec.stderr is not None and actual_stderr != spec.stderr:
+        output_failures.append(("stderr", spec.stderr, actual_stderr))
+    if mode == "run" and spec.stdout is not None and actual_stdout != spec.stdout:
+        output_failures.append(("stdout", spec.stdout, actual_stdout))
+
+    if result.returncode == want_exit and not output_failures:
+        print(f"{GREEN}OK{RESET}")
+        return True
+
+    print(f"{RED}FAIL{RESET}")
+    if result.returncode != want_exit:
+        print(f"Expected exit code: {want_exit}")
+        print(f"Actual exit code:   {result.returncode}")
+
+    for stream, expected, actual in output_failures:
+        print_text_block(f"Expected {stream}", expected)
+        print_text_block(f"Actual {stream}", actual)
+    return False
+
+
+def run_group(paths: list[Path], update: bool) -> int:
+    failures = 0
+    for path in paths:
+        if path.exists() and not run_case(path, update):
+            failures += 1
+    return failures
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        type=Path,
+        help="test files to run; defaults to the standard suite",
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="rewrite expectations from the current compiler output",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    build_env = os.environ.copy()
+    build_env["MAKEFLAGS"] = f"{build_env.get('MAKEFLAGS', '')} --silent".strip()
+    subprocess.run(
+        ["make"],
+        check=True,
+        env=build_env,
+    )
+
+    failures = sum(
+        run_group(group, args.update) for group in collect_case_groups(args.paths)
+    )
+
+    if args.update:
+        print("\nExpectations updated.")
+        return 0
+
+    if failures == 0:
+        print("\nAll tests passed!")
+        return 0
+
+    print(f"\n{failures} test(s) failed!")
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(1)

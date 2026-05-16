@@ -1,5 +1,6 @@
-test:
-    ./scripts/test
+test *args:
+    ./scripts/test {{args}}
+    ./scripts/bootstrap
 
 self-test:
     make && ./out/ucc main.c | ./scripts/asm-fmt

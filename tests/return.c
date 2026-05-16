@@ -1,3 +1,4 @@
+//# exit: 0
 char *ret_text() {
     return "x";
 }

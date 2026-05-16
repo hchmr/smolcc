@@ -1,3 +1,5 @@
+//# mode: run
+//# exit: 18
 extern int ext_counter;
 extern int ext_counter;
 int ext_counter;

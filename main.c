@@ -2478,7 +2478,7 @@ int main(int argc, char **argv) {
 
     // list objects and functions
     struct scope *scope = &scopes[0];
-    int n_funcs = 0, n_objs = 0;
+    // int n_funcs = 0, n_objs = 0;
     struct sym *it = scope->syms;
     while (it) {
         struct sym *sym = it;
@@ -2500,12 +2500,12 @@ int main(int argc, char **argv) {
     emit_memcpy();
     emit_str_literals();
 
-    write_f2(2, "generated %d functions and %d objects\n", &n_funcs, &n_objs);
+    // write_f2(2, "generated %d functions and %d objects\n", &n_funcs, &n_objs);
 
-    write_f1(2, "allocated %d bytes from arena\n", &arena_len);
-    write_f1(2, "allocated %d types\n", &n_types);
-    write_f1(2, "allocated %d symbols\n", &n_syms);
-    write_f1(2, "interned %d strings\n", &strings_len);
+    // write_f1(2, "allocated %d bytes from arena\n", &arena_len);
+    // write_f1(2, "allocated %d types\n", &n_types);
+    // write_f1(2, "allocated %d symbols\n", &n_syms);
+    // write_f1(2, "interned %d strings\n", &strings_len);
 
     return 0;
 }

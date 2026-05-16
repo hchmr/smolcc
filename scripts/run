@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+usage() {
+    echo "Usage: $0 [options] <file.c>"
+}
+
+help() {
+    usage
+    cat <<EOF
+Options:
+    -h         Show this help message
+EOF
+}
+
+
+while getopts "h" opt; do
+    case $opt in
+        h) help; exit 0 ;;
+        *) usage; exit 1 ;;
+    esac
+done
+
+shift $((OPTIND - 1))
+
+if [[ $# -ne 1 ]]; then
+    usage
+    exit 1
+fi
+
+source_file="$1"
+
+tmp_root="${TMPDIR:-/tmp}"
+build_dir=$(mktemp -d "${tmp_root%/}/ucc-run.XXXXXX")
+trap 'rm -rf "$build_dir"' EXIT
+
+output_file="$build_dir/a.out"
+
+./scripts/compile -o "$output_file" "$source_file"
+
+"$output_file"
+
