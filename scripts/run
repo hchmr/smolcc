@@ -32,7 +32,7 @@ fi
 source_file="$1"
 
 tmp_root="${TMPDIR:-/tmp}"
-build_dir=$(mktemp -d "${tmp_root%/}/ucc-run.XXXXXX")
+build_dir=$(mktemp -d "${tmp_root%/}/minicc-run.XXXXXX")
 trap 'rm -rf "$build_dir"' EXIT
 
 output_file="$build_dir/a.out"

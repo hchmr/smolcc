@@ -60,11 +60,11 @@ else
     exe_file="${output_file}"
 fi
 
-if [[ "${UCC_SKIP_MAKE:-0}" != "1" ]]; then
+if [[ "${MINICC_SKIP_MAKE:-0}" != "1" ]]; then
     env MAKEFLAGS="${MAKEFLAGS:+$MAKEFLAGS }--silent" make
 fi
 
-./out/ucc "$source_file" > "$asm_file"
+./out/minicc "$source_file" > "$asm_file"
 if [[ $stop_after_asm == true ]]; then
     exit 0
 fi

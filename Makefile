@@ -1,5 +1,5 @@
 OUT_DIR = out
-TARGET = $(OUT_DIR)/ucc
+TARGET = $(OUT_DIR)/minicc
 SRCS = main.c
 OBJS = $(SRCS:%.c=$(OUT_DIR)/%.o)
 CC = cc

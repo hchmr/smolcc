@@ -110,7 +110,7 @@ def run_command(
         )
 
     with tempfile.TemporaryDirectory(
-        prefix="ucc-test-", dir=os.environ.get("TMPDIR") or None
+        prefix="minicc-test-", dir=os.environ.get("TMPDIR") or None
     ) as temp_dir:
         output_path = Path(temp_dir) / "a.o"
         return subprocess.run(
@@ -136,7 +136,7 @@ def run_case(path: Path, update: bool) -> bool:
     spec = read_spec(path)
     mode = spec.mode or "compile-only"
     env = os.environ.copy()
-    env["UCC_SKIP_MAKE"] = "1"
+    env["MINICC_SKIP_MAKE"] = "1"
     result = run_command(path, mode, env)
 
     if update:
