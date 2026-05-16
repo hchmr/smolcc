@@ -878,8 +878,6 @@ static int const_cast(int value, struct type *type) {
         return (char)value;
     else if (type->kind == Type_Int)
         return (int)value;
-    else if (type->kind == Type_Int)
-        return value;
     else
         unreachable_case("const_cast", type->kind);
 }
@@ -980,7 +978,6 @@ static struct expr *apply_assignment_conversion(struct expr *rhs, struct type *t
         return cast_to(t, rhs);
     } else {
         error_at(&rhs->pos, "target type mismatch");
-        return 0;
     }
 }
 
