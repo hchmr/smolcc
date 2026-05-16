@@ -87,11 +87,12 @@ def update_spec(
 
 
 def print_text_block(label: str, text: str) -> None:
-    print(f"\n{label}:")
+    print(f"{label}:")
     if text:
         print(text, end="" if text.endswith("\n") else "\n")
     else:
         print("<empty>")
+    print()
 
 
 def default_exit_for(path: Path) -> int:
@@ -163,7 +164,7 @@ def run_case(path: Path, update: bool) -> bool:
     print(f"{RED}FAIL{RESET}")
     if result.returncode != want_exit:
         print(f"Expected exit code: {want_exit}")
-        print(f"Actual exit code:   {result.returncode}")
+        print(f"Actual exit code:   {result.returncode}\n")
 
     for stream, expected, actual in output_failures:
         print_text_block(f"Expected {stream}", expected)
