@@ -30,7 +30,7 @@ static void write_str(int fd, const char *s) {
     }
 }
 
-static void write_int(int fd, long n) {
+static void write_int(int fd, int n) {
     if (n < 0) {
         write_char(fd, '-');
         n = -n;
@@ -45,14 +45,7 @@ static void write_f_(int fd, const char *fmt, const char **args) {
     while (*fmt) {
         if (*fmt == '%') {
             fmt++;
-            if (*fmt == 'l') {
-                fmt++;
-                if (*fmt == 'd') {
-                    write_int(fd, **(long **)(args++));
-                } else {
-                    write_str(fd, "%l");
-                }
-            } else if (*fmt == 'd') {
+            if (*fmt == 'd') {
                 write_int(fd, **(int **)(args++));
             } else if (*fmt == 'c') {
                 write_char(fd, **(char **)(args++));
@@ -316,7 +309,6 @@ enum {
     Type_Void,
     Type_Char,
     Type_Int,
-    Type_Long,
     Type_Ptr,
     Type_Array,
     Type_Func,
@@ -345,8 +337,6 @@ static int n_types;
 static struct type *void_type;
 static struct type *char_type;
 static struct type *int_type;
-static struct type *long_type;
-static struct type *ptrdiff_type;
 
 static void type_layout(struct type *ty, int *size, int *align) {
     if (ty->kind == Type_Void) {
@@ -358,9 +348,6 @@ static void type_layout(struct type *ty, int *size, int *align) {
     } else if (ty->kind == Type_Int) {
         *size = 4;
         *align = 4;
-    } else if (ty->kind == Type_Long) {
-        *size = 8;
-        *align = 8;
     } else if (ty->kind == Type_Ptr) {
         *size = 8;
         *align = 8;
@@ -437,7 +424,7 @@ static int type_eq(struct type *a, struct type *b) {
 }
 
 static int is_integer_type(struct type *ty) {
-    return ty->kind == Type_Int || ty->kind == Type_Char || ty->kind == Type_Long;
+    return ty->kind == Type_Int || ty->kind == Type_Char;
 }
 static int is_void_type(struct type *ty) {
     return ty->kind == Type_Void;
@@ -542,9 +529,6 @@ static void type_init() {
     char_type->kind = Type_Char;
     int_type = &types[n_types++];
     int_type->kind = Type_Int;
-    long_type = &types[n_types++];
-    long_type->kind = Type_Long;
-    ptrdiff_type = long_type;
 }
 
 //=============================================================================
@@ -894,7 +878,7 @@ static int const_cast(int value, struct type *type) {
         return (char)value;
     else if (type->kind == Type_Int)
         return (int)value;
-    else if (type->kind == Type_Long)
+    else if (type->kind == Type_Int)
         return value;
     else
         unreachable_case("const_cast", type->kind);
@@ -1120,7 +1104,7 @@ static struct expr *elab_expr(struct expr *e) {
             if (!type_eq(e->subs[0]->type, e->subs[1]->type))
                 error_at(&e->pos, "pointer types must match");
             e->kind = Expr_PtrDiff;
-            e->type = ptrdiff_type;
+            e->type = int_type;  // standard doesn't mandate pointer-sized ptrdiff_t, so int is sufficient
         } else if (is_integer_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
             apply_uac(e->subs);
             e->type = e->subs[0]->type;
@@ -1400,7 +1384,7 @@ static int at_storage_class() {
 }
 
 static int at_typename() {
-    return at("void") || at("char") || at("int") || at("long") || at("struct") || at("enum") || at("const");
+    return at("void") || at("char") || at("int") || at("struct") || at("enum") || at("const");
 }
 
 static int at_decl() {
@@ -1749,8 +1733,6 @@ extern void p_decl(int scope, void *ctx) {
             base_type = int_type;
         } else if (!base_type && eat("char")) {
             base_type = char_type;
-        } else if (!base_type && eat("long")) {
-            base_type = long_type;
         } else if (!base_type && eat("struct")) {
             base_type = p_struct();
         } else if (!base_type && eat("enum")) {
@@ -1921,7 +1903,7 @@ static const char *get_str_op(struct type *type) {
         return "strb w";
     else if (type->kind == Type_Int)
         return "str w";
-    else if (type->kind == Type_Long || type->kind == Type_Ptr)
+    else if (type->kind == Type_Ptr)
         return "str x";
     else
         unreachable_case("get_str_op", type->kind);
@@ -1933,7 +1915,7 @@ static const char *get_ldr_op(struct type *type) {
         return "ldrsb x";
     else if (type->kind == Type_Int)
         return "ldrsw x";
-    else if (type->kind == Type_Long || type->kind == Type_Ptr)
+    else if (type->kind == Type_Ptr)
         return "ldr x";
     else
         unreachable_case("get_ldr_op", type->kind);

@@ -1,5 +1,5 @@
 //# mode: run
-//# exit: 18
+//# exit: 210
 extern int ext_counter;
 extern int ext_counter;
 int ext_counter;
@@ -15,18 +15,18 @@ enum {
 
 int alpha, gamma;
 static int internal_counter;
-static long internal_total;
+static int internal_total;
 static int merged_linkage_obj;
 extern int merged_linkage_obj;
 int mode_default = Mode_All;
-long counts[Mode_All][2];
+int counts[Mode_All][2];
 
 struct Forward;
 struct Forward *forward_ptr;
 
 struct Pair {
     int left;
-    long right;
+    int right;
 };
 
 struct Node {
@@ -36,7 +36,7 @@ struct Node {
 
 struct Matrix {
     int rows[2];
-    long cols[2][2];
+    int cols[2][2];
 };
 
 struct Forward {
@@ -63,8 +63,8 @@ int zero() {
     return 0;
 }
 
-static long widen(int value) {
-    long result;
+static int widen(int value) {
+    int result;
     result = value;
     return result;
 }
@@ -101,7 +101,7 @@ int main() {
         Local_C
     };
     int a, b;
-    long total;
+    int total;
     char ch;
     int values[2];
     char text[4];
@@ -156,5 +156,5 @@ int main() {
     }
 
     gamma = ch + escaped[1];
-    return internal_counter + internal_total + node.value + matrix_size;
+    return internal_counter + internal_total + node.value - matrix_size;
 }
