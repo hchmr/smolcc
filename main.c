@@ -402,17 +402,17 @@ static int type_eq(struct type *a, struct type *b) {
     if (a->kind != b->kind)
         return 0;
     if (a->kind == Type_Ptr)
-        return type_eq(a->ptr_to, b->ptr_to);
+        return a->ptr_to == b->ptr_to;
     if (a->kind == Type_Array)
-        return a->array_len == b->array_len && type_eq(a->ptr_to, b->ptr_to);
+        return a->array_len == b->array_len && a->ptr_to == b->ptr_to;
     if (a->kind == Type_Func) {
-        if (!type_eq(a->ret_type, b->ret_type))
+        if (a->ret_type != b->ret_type)
             return 0;
         if (a->n_params != b->n_params)
             return 0;
         int i = 0;
         while (i < a->n_params) {
-            if (!type_eq(a->param_types[i], b->param_types[i]))
+            if (a->param_types[i] != b->param_types[i])
                 return 0;
             i++;
         }
@@ -451,7 +451,7 @@ static int is_object_type(struct type *ty) {
 static struct type *intern_type(struct type *ty) {
     int i = 0;
     while (i < n_types) {
-        if (type_eq(ty, &types[i]))
+        if (type_eq(&types[i], ty))
             return &types[i];
         i++;
     }
@@ -513,7 +513,7 @@ static struct type *uac_type(struct type *t1, struct type *t2) {
 
 static struct type *get_common_ptr_type(struct type *t1, struct type *t2) {
     assert("get_common_ptr_type", is_ptr_type(t1) && is_ptr_type(t2));
-    if (type_eq(t1->ptr_to, t2->ptr_to))
+    if (t1->ptr_to == t2->ptr_to)
         return t1;
     if (is_void_ptr(t1))
         return t2;
@@ -570,7 +570,6 @@ static struct sym *add_sym(struct pos *pos, int kind, const char *name) {
     sym->last_pos = *pos;
     sym->next = curr_scope->syms;
     curr_scope->syms = sym;
-
     return sym;
 }
 
@@ -671,7 +670,7 @@ static struct sym *declare_global(struct pos *pos, int linkage, const char *name
     if (sym) {
         if (sym->kind != Sym_Global)
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        if (!type_eq(sym->type, type))
+        if (sym->type != type)
             decl_conflict(pos, sym, "already declared with a different type");
         if (sym->linkage == Internal && linkage == 0)
             decl_conflict(pos, sym, "already declared as static");
@@ -720,7 +719,7 @@ static struct sym *declare_func(struct pos *pos, int linkage, const char *name, 
     if (sym) {
         if (sym->kind != Sym_Func)
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        if (!type_eq(sym->type, type))
+        if (sym->type != type)
             decl_conflict(pos, sym, "already declared with a different signature");
         if (sym->linkage != Internal && linkage == Internal)
             decl_conflict(pos, sym, "already declared as non-static");
@@ -930,7 +929,7 @@ static struct expr *wrap_with(int kind, struct type *type, struct expr *orig) {
 
 static int can_assign_ptr_type(struct type *target_type, struct type *rhs_type) {
     assert("can_assign_ptr_type", is_ptr_type(target_type) && is_ptr_type(rhs_type));
-    if (type_eq(target_type, rhs_type))
+    if (target_type == rhs_type)
         return 1;
     return is_void_ptr(target_type) || is_void_ptr(rhs_type);
 }
@@ -938,7 +937,7 @@ static int can_assign_ptr_type(struct type *target_type, struct type *rhs_type) 
 // coercion
 static struct expr *cast_to(struct type *t, struct expr *e) {
     assert("cast_to", is_scalar(t) && is_scalar(e->type));
-    if (type_eq(e->type, t))
+    if (e->type == t)
         return e;
     return wrap_with(Expr_Cast, t, e);
 }
@@ -968,7 +967,7 @@ static void unify_ptr_operands(struct expr **args) {
 }
 
 static struct expr *apply_assignment_conversion(struct expr *rhs, struct type *t) {
-    if (type_eq(rhs->type, t)) {
+    if (rhs->type == t) {
         return rhs;
     } else if (is_integer_type(rhs->type) && is_integer_type(t)) {
         return cast_to(t, rhs);
@@ -1098,7 +1097,7 @@ static struct expr *elab_expr(struct expr *e) {
             e->kind = Expr_PtrSub;
             e->type = e->subs[0]->type;
         } else if (k == Expr_Sub && is_ptr_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            if (!type_eq(e->subs[0]->type, e->subs[1]->type))
+            if (e->subs[0]->type != e->subs[1]->type)
                 error_at(&e->pos, "pointer types must match");
             e->kind = Expr_PtrDiff;
             e->type = int_type;  // standard doesn't mandate pointer-sized ptrdiff_t, so int is sufficient
