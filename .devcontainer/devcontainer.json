@@ -1,0 +1,7 @@
+{
+  "name": "minicc",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "ubuntu"
+}
