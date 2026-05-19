@@ -160,6 +160,7 @@ static char arena[Arena_Cap];
 static int arena_len;
 
 static void *alloc(int len) {
+    arena_len = align_up(arena_len, 8);
     if (arena_len + len >= Arena_Cap)
         die("alloc", "out of memory");
     char *res = arena + arena_len;
