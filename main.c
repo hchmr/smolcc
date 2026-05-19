@@ -1931,8 +1931,8 @@ static void emit_scalar_data(int size, int val) {
 
 static void emit_str_load(const char *str) {
     int label_id = add_literal(str);
-    write_f1(1, "adrp x0, .L.str.%d@PAGE\n", &label_id);
-    write_f1(1, "add x0, x0, .L.str.%d@PAGEOFF\n", &label_id);
+    write_f1(1, "adrp x0, .L.str.%d\n", &label_id);
+    write_f1(1, "add x0, x0, :lo12:.L.str.%d\n", &label_id);
 }
 
 static void emit_int_load(int val, int reg) {
@@ -1959,12 +1959,12 @@ static void emit_obj(struct sym *sym) {
     type_layout(sym->type, &size, &align);
 
     if (size <= 8) {
-        write_str(1, ".section __DATA, __data\n");
+        write_str(1, ".section .data\n");
         if (sym->linkage == External) {
-            write_f1(1, ".globl _%s\n", sym->name);
+            write_f1(1, ".globl %s\n", sym->name);
         }
         write_f1(1, ".balign %d\n", &align);
-        write_f1(1, "_%s:\n", sym->name);
+        write_f1(1, "%s:\n", sym->name);
         if (sym->is_defined) {
             emit_scalar_data(size, sym->val);
         } else {
@@ -1972,9 +1972,12 @@ static void emit_obj(struct sym *sym) {
         }
     } else {
         if (sym->linkage == External) {
-            write_f1(1, ".globl _%s\n", sym->name);
+            write_f1(1, ".globl %s\n", sym->name);
         }
-        write_f3(1, ".zerofill __DATA, __bss, _%s, %d, %d\n", sym->name, &size, &align);
+        write_str(1, ".section .bss\n");
+        write_f1(1, ".balign %d\n", &align);
+        write_f1(1, "%s:\n", sym->name);
+        write_f1(1, ".space %d\n", &size);
     }
 }
 
@@ -2027,9 +2030,9 @@ static void emit_store(struct type *type, int src, int dst) {
 
 static void emit_sext(struct type *type, int reg) {
     if (type->kind == Type_Char) {
-        write_f2(1, "sxtb x%d, x%d\n", &reg, &reg);
+        write_f2(1, "sxtb x%d, w%d\n", &reg, &reg);
     } else if (type->kind == Type_Int) {
-        write_f2(1, "sxtw x%d, x%d\n", &reg, &reg);
+        write_f2(1, "sxtw x%d, w%d\n", &reg, &reg);
     }
 }
 
@@ -2093,7 +2096,7 @@ static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
         write_str(1, "mov x1, x0\n");
         emit_pop(0);
         emit_int_load(type_size(dst_type), 2);
-        write_str(1, "bl _memcpy\n");
+        write_str(1, "bl memcpy\n");
     }
 }
 
@@ -2102,8 +2105,13 @@ static void emit_place_expr(struct expr *expr) {
     if (k == Expr_Ident) {
         struct sym *sym = expr->sym;
         if (sym->kind == Sym_Global || sym->kind == Sym_Func) {
-            write_f1(1, "adrp x0, _%s@PAGE\n", sym->name);
-            write_f1(1, "add x0, x0, _%s@PAGEOFF\n", sym->name);
+            if (sym->linkage == External && !sym->is_defined) {
+                write_f1(1, "adrp x0, :got:%s\n", sym->name);
+                write_f1(1, "ldr x0, [x0, :got_lo12:%s]\n", sym->name);
+            } else {
+                write_f1(1, "adrp x0, %s\n", sym->name);
+                write_f1(1, "add x0, x0, :lo12:%s\n", sym->name);
+            }
         } else if (sym->kind == Sym_Local) {
             emit_slot_addr(sym->slot_idx, 0);
         } else {
@@ -2251,7 +2259,7 @@ static void emit_scalar_expr(struct expr *expr) {
             i--;
             emit_pop(i);
         }
-        write_f1(1, "bl _%s\n", func_sym->name);
+        write_f1(1, "bl %s\n", func_sym->name);
         // if calling a foreign function, we can't be sure
         // if it will sign-extend or zero the return value.
         if (is_scalar(expr->type) && type_size(expr->type) < 8) {
@@ -2339,9 +2347,9 @@ static void emit_func(struct sym *func) {
 
     write_str(1, ".text\n");
     if (func->linkage != Internal) {
-        write_f1(1, ".globl _%s\n", func->name);
+        write_f1(1, ".globl %s\n", func->name);
     }
-    write_f1(1, "_%s:\n", func->name);
+    write_f1(1, "%s:\n", func->name);
     // prologue
     write_str(1, "stp x29, x30, [sp, #-16]!\n");
     write_str(1, "mov x29, sp\n");
@@ -2362,22 +2370,22 @@ static void emit_func(struct sym *func) {
 }
 
 static void emit_memcpy() {
-    write_str(1, ".section __TEXT,__text\n");
-    write_str(1, ".globl _memcpy\n");
-    write_str(1, "_memcpy:\n");
+    write_str(1, ".section .text\n");
+    write_str(1, ".globl memcpy\n");
+    write_str(1, "memcpy:\n");
     write_str(1, "mov x3, x0\n");
-    write_str(1, "cbz x2, .L._memcpy.end\n");
-    write_str(1, ".L._memcpy.body:\n");
+    write_str(1, "cbz x2, .L.memcpy.end\n");
+    write_str(1, ".L.memcpy.body:\n");
     write_str(1, "ldrb w4, [x1], #1\n");
     write_str(1, "strb w4, [x3], #1\n");
     write_str(1, "subs x2, x2, #1\n");
-    write_str(1, "cbnz x2, .L._memcpy.body\n");
-    write_str(1, ".L._memcpy.end:\n");
+    write_str(1, "cbnz x2, .L.memcpy.body\n");
+    write_str(1, ".L.memcpy.end:\n");
     write_str(1, "ret\n");  // x0 still holds dest
 }
 
 static void emit_str_literals() {
-    write_str(1, ".section __TEXT,__cstring,cstring_literals\n");
+    write_str(1, ".section .rodata\n");
     struct emitted_str *node = output_strs;
     while (node) {
         const char *str = node->str;

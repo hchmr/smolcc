@@ -1,7 +1,7 @@
 minicc
 
 A minimal self-hosting C compiler for a subset of C99, targeting
-aarch64-apple-darwin. Around 2.5k lines of code.
+aarch64-unknown-linux. Around 2.5k lines of code.
 
 Basic support for the following features:
 - types: void, char, int, pointer, array, struct
@@ -11,9 +11,7 @@ Basic support for the following features:
 No preprocessor, typedefs, varargs, etc.
 
 Implementation notes:
-- dependencies:
-    - C99-compiler, as, ld
-    - only basic POSIX functions for file I/O
+- dependencies: C99 compiler + POSIX libc; builds on Linux and macOS
 - static pre-allocated arena memory management
 - types and strings are interned to save memory and simplify comparisons
 - parsing:
@@ -25,7 +23,6 @@ Implementation notes:
 - semantic analysis:
     - follows C semantics fairly closely, with some simplifications
     - type checking and implicit conversions for expressions
-    - scope and symbol resolution for variables and functions
 - code generation:
     - native calling convention with x0-x7 for arguments and result
     - locals allocated on the stack with fixed offsets

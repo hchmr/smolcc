@@ -39,8 +39,6 @@ if [[ $# -ne 1 ]]; then
 fi
 
 source_file="$1"
-arch="$(uname -m)"
-sdk_root="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
 
 if [[ -z "$output_file" ]]; then
     asm_file="${source_file%.c}.s"
@@ -69,13 +67,9 @@ if [[ $stop_after_asm == true ]]; then
     exit 0
 fi
 
-as -arch "$arch" -o "$obj_file" "$asm_file"
+cc "$asm_file" -c -o "$obj_file"
 if [[ $stop_after_obj == true ]]; then
     exit 0
 fi
 
-ld \
-    -syslibroot "$sdk_root" \
-    -o "$exe_file" \
-    "$obj_file" \
-    -lSystem
+cc "$obj_file" -o "$exe_file"
