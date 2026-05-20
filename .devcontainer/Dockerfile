@@ -17,12 +17,14 @@ RUN apt-get update \
         build-essential \
         clangd \
         curl \
+        fd-find \
         git \
         just \
         lldb \
         man-db \
         python3 \
         python3-pip \
+        ripgrep \
         sudo \
         zsh \
     && rm -rf /var/lib/apt/lists/*

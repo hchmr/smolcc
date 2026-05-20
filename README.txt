@@ -1,7 +1,7 @@
 minicc
 
 A minimal self-hosting C compiler for a subset of C99, targeting
-aarch64-unknown-linux. Around 2.5k lines of code.
+aarch64-unknown-linux. Around 2k lines of code.
 
 Basic support for the following features:
 - types: void, char, int, pointer, array, struct

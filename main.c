@@ -12,6 +12,13 @@ extern void abort();
 
 enum { EOF = -1 };
 
+static void write_str(int fd, const char *s) {
+    const char *p = s;
+    while (*p++)
+        ;
+    write(fd, s, p - s - 1);
+}
+
 static void write_char(int fd, int c) {
     write(fd, &c, 1);
 }
@@ -22,12 +29,6 @@ static int read_char(int fd) {
     if (n <= 0)
         return EOF;
     return c;
-}
-
-static void write_str(int fd, const char *s) {
-    while (*s) {
-        write_char(fd, *s++);
-    }
 }
 
 static void write_int(int fd, int n) {
@@ -51,11 +52,7 @@ static void write_f_(int fd, const char *fmt, const char **args) {
                 write_char(fd, **(char **)(args++));
             } else if (*fmt == 's') {
                 const char *s = *(char **)(args++);
-                if (s) {
-                    write_str(fd, s);
-                } else {
-                    write_str(fd, "(null)");
-                }
+                write_str(fd, s ? s : "(null)");
             } else {
                 write_char(fd, '%');
             }
@@ -93,15 +90,7 @@ static void write_ln(int fd, const char *s) {
 }
 
 //=============================================================================
-//= str
-
-static int str_len(const char *s) {
-    int len = 0;
-    while (s[len]) {
-        len++;
-    }
-    return len;
-}
+//= misc
 
 static int str_eq(const char *a, const char *b) {
     if (a == b)
@@ -111,9 +100,6 @@ static int str_eq(const char *a, const char *b) {
             return 0;
     return *a == *b;
 }
-
-//=============================================================================
-//= misc
 
 static int align_up(int n, int align) {
     return (n + align - 1) / align * align;
@@ -126,12 +112,6 @@ static const char *find_chr(const char *s, int c) {
         s++;
     }
     return 0;
-}
-
-static void ptr_swap(void **p1, void **p2) {
-    void *tmp = *p1;
-    *p1 = *p2;
-    *p2 = tmp;
 }
 
 //=============================================================================
@@ -160,12 +140,10 @@ static char arena[Arena_Cap];
 static int arena_len;
 
 static void *alloc(int len) {
-    arena_len = align_up(arena_len, 8);
-    if (arena_len + len >= Arena_Cap)
+    arena_len = align_up(arena_len, 8) + len;
+    if (arena_len >= Arena_Cap)
         die("alloc", "out of memory");
-    char *res = arena + arena_len;
-    arena_len = arena_len + len;
-    return res;
+    return arena + arena_len - len;
 }
 
 static void *mem_clone(void *s, int len) {
@@ -176,21 +154,25 @@ static void *mem_clone(void *s, int len) {
     return res;
 }
 
-static char *strings[10240];
-static int strings_len;
+static struct string {
+    int label, len;
+    char *chars;
+    struct string *next;
+} *strings;
 
-static const char *intern(const char *s, int len) {
-    int i = 0;
-    while (i < strings_len) {
-        if (str_eq(strings[i], s))
-            return strings[i];
-        i++;
+struct string *intern(const char *s, int len) {
+    struct string *str = strings;
+    while (str) {
+        if (str_eq(str->chars, s))
+            return str;
+        str = str->next;
     }
-    if (strings_len >= 10240)
-        die("intern", "out of memory for strings");
-    char *res = mem_clone((void *)s, len);
-    strings[strings_len++] = res;
-    return res;
+    struct string *new_str = alloc(sizeof(struct string));
+    new_str->chars = mem_clone((void *)s, len + 1);
+    new_str->len = len;
+    new_str->next = strings;
+    strings = new_str;
+    return new_str;
 }
 
 //=============================================================================
@@ -214,94 +196,42 @@ static void error_at(struct pos *pos, const char *msg) {
 //=============================================================================
 //= symbols
 
-enum {
-    MAX_SYMS = 1024,
-    MAX_STRUCT_FIELDS = 32,
-    MAX_FUNC_PARAMS = 8,
-    MAX_LOCALS = 32,
-};
+enum { MAX_FUNC_PARAMS = 8 };
 
 enum {
-    Sym_Global,
+    Sym_Global = 1,
     Sym_Func,
     Sym_Struct,
     Sym_Const,
     Sym_Local,
+    Sym_Field,
 };
 
 enum {
-    Ns_Struct = 1,
+    Extern = 1,
+    Static = 2,
 };
 
-struct field {
-    const char *name;
-    struct type *type;
-    int offset;
-};
-
-struct func_param {
-    struct type *type;
-    struct pos name_pos;
-    const char *name;
-};
-
-enum {
-    External = 1,
-    Internal = 2,
-};
-
-static struct sym {
+struct sym {
     int kind;
-    int linkage;
+    struct pos last_pos;
+    int storage_class;
     const char *name;
     struct type *type;
     int is_defined;
 
-    struct pos last_pos;
-
-    // case Sym_Const:
+    // for Sym_Const
     int val;
-    // case Sym_Func:
-    struct func_param params[MAX_FUNC_PARAMS];
-    int n_params;
+    // for Sym_Func
     struct stmt *body;
-    struct sym *locals[MAX_LOCALS];
-    int n_locals;
-    // case Sym_Struct:
-    struct field fields[MAX_STRUCT_FIELDS];
-    int n_fields;
-    // case Sym_Local:
-    int slot_idx;
+    // for Sym_Struct and Sym_Func
+    struct scope *scope;
+    int size, align;
+    // for Sym_Local and Sym_Field
     int offset;
 
     struct sym *next;
-} syms[MAX_SYMS];
-static int n_syms;
-
-static int sym_ns(struct sym *sym) {
-    if (sym->kind == Sym_Struct)
-        return Ns_Struct;
-    return 0;
-}
-
-static struct sym *alloc_sym() {
-    if (n_syms >= MAX_SYMS) {
-        write_f1(2, "error: too many symbols\n", 0);
-        _exit(1);
-    }
-    return &syms[n_syms++];
-}
-
-static struct field *lookup_field(struct sym *sym, const char *name) {
-    int i = 0;
-    while (i < sym->n_fields) {
-        struct field *field = &sym->fields[i];
-        if (field->name == name)
-            return field;
-        i++;
-    }
-    return 0;
-}
+};
 
 //=============================================================================
 //= types
@@ -316,107 +246,75 @@ enum {
     Type_Struct,
 };
 
-enum {
-    MAX_TYPES = 512,
-};
-
-static struct type {
+struct type {
     int kind;
-    // for pointers
+    // for Type_Ptr and Type_Array
     struct type *ptr_to;
-    // for arrays
+    // for Type_Array
     int array_len;
-    // for functions
+    // for Type_Func
     struct type *ret_type;
     struct type *param_types[MAX_FUNC_PARAMS];
     int n_params;
-    // for structs
+    // for Type_Struct
     struct sym *sym;
-} types[MAX_TYPES];
-static int n_types;
+    // for type interning
+    struct type *next;
+};
 
-static struct type *void_type;
-static struct type *char_type;
-static struct type *int_type;
+static struct type *types, *void_type, *char_type, *int_type;
 
-static void type_layout(struct type *ty, int *size, int *align) {
-    if (ty->kind == Type_Void) {
-        *size = *align = 0;
-    } else if (ty->kind == Type_Char) {
-        *size = *align = 1;
+static int type_size(struct type *ty) {
+    if (ty->kind == Type_Char) {
+        return 1;
     } else if (ty->kind == Type_Int) {
-        *size = *align = 4;
+        return 4;
     } else if (ty->kind == Type_Ptr) {
-        *size = *align = 8;
+        return 8;
     } else if (ty->kind == Type_Array) {
-        int elem_size, elem_align;
-        type_layout(ty->ptr_to, &elem_size, &elem_align);
-        *size = align_up(elem_size, elem_align) * ty->array_len;
-        *align = elem_align;
+        return type_size(ty->ptr_to) * ty->array_len;
     } else if (ty->kind == Type_Struct) {
-        struct sym *sym = ty->sym;
-        *size = 0;
-        int max_align = 0;
-        int i = 0;
-        while (i < sym->n_fields) {
-            struct field *field = &sym->fields[i];
-            int field_size, field_align;
-            type_layout(field->type, &field_size, &field_align);
-            *size = align_up(field->offset, field_align) + field_size;
-            if (field_align > max_align) {
-                max_align = field_align;
-            }
-            i++;
-        }
-        if (max_align > 0)
-            *size = align_up(*size, max_align);
-        *align = max_align;
-    } else if (ty->kind == Type_Func) {
-        *size = *align = 0;
+        return ty->sym->is_defined ? ty->sym->size : 0;
     } else {
-        unreachable_case("type_layout", ty->kind);
+        return 0;
     }
 }
 
-static int type_size(struct type *ty) {
-    int size, align;
-    type_layout(ty, &size, &align);
-    return size;
-}
-
 static int type_align(struct type *ty) {
-    int size, align;
-    type_layout(ty, &size, &align);
-    return align;
+    if (ty->kind == Type_Array) {
+        return type_align(ty->ptr_to);
+    } else if (ty->kind == Type_Struct) {
+        return ty->sym->is_defined ? ty->sym->align : 0;
+    } else {
+        return type_size(ty);
+    }
 }
 
 // type predicates
 
 static int type_eq(struct type *a, struct type *b) {
-    if (a == b)
+    if (a == b) {
         return 1;
-    if (a->kind != b->kind)
+    } else if (a->kind != b->kind) {
         return 0;
-    if (a->kind == Type_Ptr)
+    } else if (a->kind == Type_Ptr) {
         return a->ptr_to == b->ptr_to;
-    if (a->kind == Type_Array)
+    } else if (a->kind == Type_Array) {
         return a->array_len == b->array_len && a->ptr_to == b->ptr_to;
-    if (a->kind == Type_Func) {
-        if (a->ret_type != b->ret_type)
-            return 0;
-        if (a->n_params != b->n_params)
+    } else if (a->kind == Type_Func) {
+        if (a->ret_type != b->ret_type || a->n_params != b->n_params)
             return 0;
         int i = 0;
-        while (i < a->n_params) {
-            if (a->param_types[i] != b->param_types[i])
+        while (i++ < a->n_params) {
+            if (a->param_types[i - 1] != b->param_types[i - 1])
                 return 0;
-            i++;
         }
         return 1;
-    }
-    if (a->kind == Type_Struct)
+    } else if (a->kind == Type_Struct) {
         return a->sym == b->sym;
-    return 1;
+    } else {
+        return 1;
+    }
 }
 
 static int is_integer_type(struct type *ty) {
@@ -445,18 +343,16 @@ static int is_object_type(struct type *ty) {
 }
 
 static struct type *intern_type(struct type *ty) {
-    int i = 0;
-    while (i < n_types) {
-        if (type_eq(&types[i], ty))
-            return &types[i];
-        i++;
+    struct type *t = types;
+    while (t) {
+        if (type_eq(t, ty))
+            return t;
+        t = t->next;
     }
-    if (n_types >= MAX_TYPES) {
-        write_f1(2, "error: too many types\n", 0);
-        _exit(1);
-    }
-    types[n_types] = *ty;
-    return &types[n_types++];
+    t = mem_clone(ty, sizeof(struct type));
+    t->next = types;
+    types = t;
+    return t;
 }
 
 static struct type *new_ptr_type(struct type *base) {
@@ -486,25 +382,16 @@ static struct type *new_func_type(struct type *ret_type, struct type **param_typ
     ty.kind = Type_Func;
     ty.ret_type = ret_type;
     int i = 0;
-    while (i < n_params) {
-        ty.param_types[i] = param_types[i];
-        i++;
+    while (i++ < n_params) {
+        ty.param_types[i - 1] = param_types[i - 1];
     }
     ty.n_params = n_params;
     return intern_type(&ty);
 }
 
-static struct type *int_promotion_type(struct type *t1, struct type *t2) {
-    assert("int_promotion_type", is_integer_type(t1) && is_integer_type(t2));
-    if (t1->kind < t2->kind)
-        return t2;
-    else
-        return t1;
-}
-
 static struct type *uac_type(struct type *t1, struct type *t2) {
     assert("uac_type", is_integer_type(t1) && is_integer_type(t2));
-    return int_promotion_type(t1, t2);
+    return t1->kind < t2->kind ? t2 : t1;
 }
 
 static struct type *get_common_ptr_type(struct type *t1, struct type *t2) {
@@ -518,63 +405,55 @@ static struct type *get_common_ptr_type(struct type *t1, struct type *t2) {
     return 0;
 }
 
-static void type_init() {
-    void_type = &types[n_types++];
-    void_type->kind = Type_Void;
-    char_type = &types[n_types++];
-    char_type->kind = Type_Char;
-    int_type = &types[n_types++];
-    int_type->kind = Type_Int;
+static void init_types() {
+    struct type tmp;
+    tmp.kind = Type_Void;
+    void_type = intern_type(&tmp);
+    tmp.kind = Type_Char;
+    char_type = intern_type(&tmp);
+    tmp.kind = Type_Int;
+    int_type = intern_type(&tmp);
 }
 
 //=============================================================================
 //= symbol table
 
-enum {
-    MAX_SCOPES = 256,
-};
-
 static struct scope {
-    struct sym *syms;
-} scopes[MAX_SCOPES];
-static struct scope *curr_scope;
+    struct sym *head, *tail;
+    struct scope *parent;
+} *curr_scope;
 
-static void enter_scope(struct pos *pos) {
-    int depth = curr_scope - scopes;
-    if (depth + 1 >= MAX_SCOPES)
-        error_at(pos, "too many nested scopes");
-    curr_scope++;
-    curr_scope->syms = 0;
+static struct scope *push_scope() {
+    struct scope *scope = alloc(sizeof(struct scope));
+    scope->parent = curr_scope;
+    return curr_scope = scope;
 }
 
-static void reenter_scope() {
-    int depth = curr_scope - scopes;
-    assert("reenter_scope", depth + 1 < MAX_SCOPES);
-    curr_scope++;
+static void pop_scope() {
+    curr_scope = curr_scope->parent;
 }
 
-static void leave_scope() {
-    if (curr_scope <= scopes)
-        die("leave_scope", "scope underflow");
-    curr_scope--;
-}
-
-static struct sym *add_sym(struct pos *pos, int kind, const char *name) {
-    struct sym *sym = alloc_sym();
+static struct sym *add_sym(struct pos *pos, struct scope *scope, int kind, const char *name) {
+    struct sym *sym = alloc(sizeof(struct sym));
     sym->kind = kind;
     sym->name = name;
     sym->last_pos = *pos;
-    sym->next = curr_scope->syms;
-    curr_scope->syms = sym;
+    if (scope->head) {
+        scope->tail->next = sym;
+    } else {
+        scope->head = sym;
+    }
+    scope->tail = sym;
     return sym;
 }
 
-static struct sym *lookup_in(struct scope *scope, int ns, const char *name) {
+static struct sym *lookup_in(struct scope *scope, int is_struct, const char *name) {
     if (!name)
         return 0;
-    struct sym *sym = scope->syms;
+    struct sym *sym = scope->head;
     while (sym) {
-        if (sym_ns(sym) == ns && sym->name == name)
+        int sym_is_struct = sym->kind == Sym_Struct;
+        if (sym_is_struct == is_struct && sym->name == name)
             return sym;
         sym = sym->next;
     }
@@ -583,11 +462,11 @@ static struct sym *lookup_in(struct scope *scope, int ns, const char *name) {
 
 static struct sym *lookup(int ns, const char *name) {
     struct scope *s = curr_scope;
-    while (s >= scopes) {
+    while (s) {
         struct sym *sym = lookup_in(s, ns, name);
         if (sym)
             return sym;
-        s--;
+        s = s->parent;
     }
     return 0;
 }
@@ -599,137 +478,49 @@ static void decl_conflict(struct pos *pos, struct sym *sym, const char *msg) {
     _exit(1);
 }
 
-static struct sym *declare_struct(struct pos *pos, const char *name, int is_def) {
-    struct sym *sym = lookup_in(curr_scope, Ns_Struct, name);
-    if (sym) {
-        if (sym->kind != Sym_Struct)
-            decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        if (is_def && sym->is_defined)
-            decl_conflict(pos, sym, "already defined");
-        sym->is_defined = sym->is_defined | is_def;
-        return sym;
+static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, int storage_class, const char *name,
+                           struct type *type, int is_def) {
+    struct scope *scope = curr_scope;
+    if (parent_sym && parent_sym->kind == Sym_Struct) {
+        scope = parent_sym->scope;
     }
-    sym = add_sym(pos, Sym_Struct, name);
-    sym->type = new_struct_type(sym);
-    sym->is_defined = is_def;
-    return sym;
-}
 
-static void declare_field(struct pos *pos, struct sym *sym, const char *name, struct type *type) {
-    if (lookup_field(sym, name))
-        error_at(pos, "duplicate field name in struct");
-    if (sym->n_fields >= MAX_STRUCT_FIELDS)
-        error_at(pos, "too many fields in struct");
-    int offset = 0;
-    if (sym->n_fields > 0) {
-        struct field *prev = &sym->fields[sym->n_fields - 1];
-        offset = prev->offset + type_size(prev->type);
-    }
-    struct field *field = &sym->fields[sym->n_fields++];
-    field->name = name;
-    field->type = type;
-    field->offset = align_up(offset, type_align(type));
-}
-
-static struct sym *define_const(struct pos *pos, const char *name, int val) {
-    struct sym *sym = lookup_in(curr_scope, 0, name);
+    struct sym *sym = lookup_in(scope, kind == Sym_Struct, name);
     if (sym) {
-        if (sym->kind != Sym_Const)
+        if (sym->kind != kind)
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        decl_conflict(pos, sym, "already defined");
-    }
-    sym = add_sym(pos, Sym_Const, name);
-    sym->type = int_type;
-    sym->val = val;
-    return sym;
-}
-
-static struct sym *define_local(struct pos *pos, struct sym *func, const char *name, struct type *type) {
-    struct sym *sym = lookup_in(curr_scope, 0, name);
-    if (sym) {
-        if (sym->kind != Sym_Local)
-            decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        decl_conflict(pos, sym, "already defined");
-    }
-    if (func->n_locals >= MAX_LOCALS)
-        error_at(pos, "local variable limit reached for function");
-    sym = add_sym(pos, Sym_Local, name);
-    sym->type = type;
-    sym->is_defined = 1;
-    sym->slot_idx = func->n_locals;
-    func->locals[func->n_locals++] = sym;
-    return sym;
-}
-
-static struct sym *declare_global(struct pos *pos, int linkage, const char *name, struct type *type, int is_def) {
-    struct sym *sym = lookup_in(curr_scope, 0, name);
-    if (sym) {
-        if (sym->kind != Sym_Global)
-            decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        if (sym->type != type)
+        if (kind != Sym_Struct && sym->type != type)
             decl_conflict(pos, sym, "already declared with a different type");
-        if (sym->linkage == Internal && linkage == 0)
+        if (is_def && sym->is_defined)
+            decl_conflict(pos, sym, "already defined");
+        if (kind == Sym_Global && sym->storage_class == Static && storage_class == 0)
             decl_conflict(pos, sym, "already declared as static");
-        if (sym->linkage != Internal && linkage == Internal)
+        if ((kind == Sym_Global || kind == Sym_Func) && sym->storage_class != Static && storage_class == Static)
             decl_conflict(pos, sym, "already declared as non-static");
-        if (is_def && sym->is_defined)
-            decl_conflict(pos, sym, "already defined");
-        sym->is_defined = sym->is_defined | is_def;
-        return sym;
-    }
-    sym = add_sym(pos, Sym_Global, name);
-    sym->type = type;
-    sym->is_defined = is_def;
-    sym->linkage = linkage;
-    return sym;
-}
-
-static struct type *prototype_to_func_type(struct type *ret_type, struct func_param *params, int n_params) {
-    struct type *param_types[MAX_FUNC_PARAMS];
-    int i = 0;
-    while (i < n_params) {
-        param_types[i] = params[i].type;
-        i++;
-    }
-    return new_func_type(ret_type, param_types, n_params);
-}
-
-static void set_func_params(struct sym *sym, struct func_param *params, int n_params, int is_def) {
-    sym->n_params = n_params;
-    int i = 0;
-    while (i < n_params) {
-        sym->params[i].type = params[i].type;
-        if (is_def) {
-            sym->params[i].name = params[i].name;
+        if (kind != Sym_Struct) {
+            sym->is_defined = sym->is_defined | is_def;
         }
-        i++;
-    }
-}
-
-static struct sym *declare_func(struct pos *pos, int linkage, const char *name, struct type *ret_type,
-                                struct func_param *params, int n_params, int is_def) {
-    if (!is_scalar(ret_type) && !is_void_type(ret_type))
-        error_at(pos, "bad function return type");
-    struct type *type = prototype_to_func_type(ret_type, params, n_params);
-    struct sym *sym = lookup_in(curr_scope, 0, name);
-    if (sym) {
-        if (sym->kind != Sym_Func)
-            decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        if (sym->type != type)
-            decl_conflict(pos, sym, "already declared with a different signature");
-        if (sym->linkage != Internal && linkage == Internal)
-            decl_conflict(pos, sym, "already declared as non-static");
-        if (is_def && sym->is_defined)
-            decl_conflict(pos, sym, "already defined");
-        set_func_params(sym, params, n_params, is_def);
-        sym->is_defined = sym->is_defined | is_def;
         return sym;
     }
-    sym = add_sym(pos, Sym_Func, name);
-    sym->type = type;
-    set_func_params(sym, params, n_params, is_def);
+    sym = add_sym(pos, scope, kind, name);
+    sym->type = kind == Sym_Struct ? new_struct_type(sym) : type;
     sym->is_defined = is_def;
-    sym->linkage = linkage;
+    sym->storage_class = storage_class;
+    if (parent_sym && (kind == Sym_Local || kind == Sym_Field)) {
+        int size = type_size(type), align = type_align(type);
+        if (kind == Sym_Local) {
+            sym->offset = -align_up(parent_sym->size + size, align);
+            parent_sym->size = -sym->offset;
+        } else {
+            sym->offset = align_up(parent_sym->size, align);
+            parent_sym->size = sym->offset + size;
+        }
+
+        if (parent_sym->align < align) {
+            parent_sym->align = align;
+        }
+    }
+
     return sym;
 }
 
@@ -781,12 +572,12 @@ struct expr {
     struct type *type;
 
     int int_val;
-    const char *str_val;
+    struct string *str_val;
+    const char *name;
     struct expr **subs;
     int n_subs;
 
     struct sym *sym;  // resolved symbol
-    struct field *field;  // resolved struct field
 };
 
 enum {
@@ -851,8 +642,7 @@ static int is_func_expr(struct expr *expr) {
     return expr->kind == Expr_Ident && expr->sym->kind == Sym_Func;
 }
 static int is_lvalue(struct expr *expr) {
-    int k = expr->kind;
-    return is_var_expr(expr) || k == Expr_Deref || k == Expr_Member;
+    return is_var_expr(expr) || expr->kind == Expr_Deref || expr->kind == Expr_Member;
 }
 static int is_addressable(struct expr *expr) {
     return is_lvalue(expr) || is_func_expr(expr) || expr->kind == Expr_Str;
@@ -900,8 +690,7 @@ static int eval(struct expr *expr) {
         if (is_ptr_type(expr->type) && is_null_ptr(expr->subs[0])) {
             return 0;
         } else if (is_integer_type(expr->type) && is_integer_type(expr->subs[0]->type)) {
-            int value = eval(expr->subs[0]);
-            return const_cast(value, expr->type);
+            return const_cast(eval(expr->subs[0]), expr->type);
         } else {
             error_at(&expr->pos, "bad cast in constant expression");
         }
@@ -921,13 +710,6 @@ static struct expr *wrap_with(int kind, struct type *type, struct expr *orig) {
     wrapper->type = type;
     wrapper->subs[0] = orig;
     return wrapper;
-}
-
-static int can_assign_ptr_type(struct type *target_type, struct type *rhs_type) {
-    assert("can_assign_ptr_type", is_ptr_type(target_type) && is_ptr_type(rhs_type));
-    if (target_type == rhs_type)
-        return 1;
-    return is_void_ptr(target_type) || is_void_ptr(rhs_type);
 }
 
 // coercion
@@ -967,8 +749,10 @@ static struct expr *apply_assignment_conversion(struct expr *rhs, struct type *t
         return rhs;
     } else if (is_integer_type(rhs->type) && is_integer_type(t)) {
         return cast_to(t, rhs);
-    } else if (is_ptr_type(t)) {
-        if (!is_null_ptr(rhs) && (!is_ptr_type(rhs->type) || !can_assign_ptr_type(t, rhs->type)))
+    } else if (is_ptr_type(t) && is_null_ptr(rhs)) {
+        return cast_to(t, rhs);
+    } else if (is_ptr_type(t) && is_ptr_type(rhs->type)) {
+        if (!(t->ptr_to == rhs->type->ptr_to || is_void_ptr(t) || is_void_ptr(rhs->type)))
             error_at(&rhs->pos, "target type mismatch. Pointer types are incompatible.");
         return cast_to(t, rhs);
     } else {
@@ -978,9 +762,7 @@ static struct expr *apply_assignment_conversion(struct expr *rhs, struct type *t
 
 static struct expr *ptr_decay(struct expr *e) {
     if (is_array_type(e->type)) {
-        struct type *array_type = e->type;
-        struct type *elem_type = array_type->ptr_to;
-        return wrap_with(Expr_Cast, new_ptr_type(elem_type), wrap_with(Expr_Addr, new_ptr_type(array_type), e));
+        return wrap_with(Expr_Cast, new_ptr_type(e->type->ptr_to), wrap_with(Expr_Addr, new_ptr_type(e->type), e));
     } else if (is_func_type(e->type)) {
         return wrap_with(Expr_Addr, new_ptr_type(e->type), e);
     } else {
@@ -991,12 +773,10 @@ static struct expr *ptr_decay(struct expr *e) {
 static struct expr *elab_expr(struct expr *e);
 
 static void elab_subexprs(struct expr *e) {
-    int k = e->kind;
-
     int i = 0;
     while (i < e->n_subs) {
         e->subs[i] = elab_expr(e->subs[i]);
-        if (k != Expr_Addr) {
+        if (e->kind != Expr_Addr) {
             e->subs[i] = ptr_decay(e->subs[i]);
         }
         i++;
@@ -1016,9 +796,9 @@ static struct expr *elab_expr(struct expr *e) {
         e->kind = Expr_Num;
         e->type = char_type;
     } else if (k == Expr_Str) {
-        e->type = new_array_type(char_type, str_len(e->str_val) + 1);
+        e->type = new_array_type(char_type, e->str_val->len + 1);
     } else if (k == Expr_Ident) {
-        struct sym *sym = lookup(0, e->str_val);
+        struct sym *sym = lookup(0, e->name);
         if (!sym)
             error_at(&e->pos, "undefined symbol");
         if (sym->kind != Sym_Const && sym->kind != Sym_Local && sym->kind != Sym_Global && sym->kind != Sym_Func)
@@ -1058,10 +838,12 @@ static struct expr *elab_expr(struct expr *e) {
         if (e->subs[0]->type->kind != Type_Struct)
             error_at(&e->pos, "member access on non-struct type");
         struct sym *sym = e->subs[0]->type->sym;
-        struct field *field = lookup_field(sym, e->str_val);
+        if (!sym->is_defined)
+            error_at(&e->pos, "member access on incomplete struct type");
+        struct sym *field = lookup_in(sym->scope, 0, e->name);
         if (!field)
             error_at(&e->pos, "member not found in struct");
-        e->field = field;
+        e->sym = field;
         e->type = field->type;
     } else if (k == Expr_Addr) {
         if (!is_addressable(e->subs[0]))
@@ -1084,7 +866,9 @@ static struct expr *elab_expr(struct expr *e) {
             error_at(&e->pos, "cast requires scalar types");
     } else if (k == Expr_Mul || k == Expr_Div || k == Expr_Mod || k == Expr_Add || k == Expr_Sub) {
         if (k == Expr_Add && is_integer_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            ptr_swap((void **)&e->subs[0], (void **)&e->subs[1]);
+            void *tmp = e->subs[0];
+            e->subs[0] = e->subs[1];
+            e->subs[1] = tmp;
         }
         if (k == Expr_Add && is_ptr_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
             e->kind = Expr_PtrAdd;
@@ -1228,12 +1012,6 @@ static void next_chr() {
     chr = read_char(inp);
 }
 
-static void lex_init(const char *file) {
-    chr_pos.file = file;
-    chr_pos.line = chr_pos.col = 1;
-    next_chr();
-}
-
 static void lex() {
     while (1) {
         tok_len = 0;
@@ -1312,10 +1090,6 @@ static void lex() {
 //=============================================================================
 //= parse.dsl
 
-static void parse_init() {
-    lex();
-}
-
 static int at(const char *t) {
     return str_eq(tok_str, t);
 }
@@ -1344,9 +1118,9 @@ static void unexpected_expected(const char *d) {
 static const char *p_ident() {
     if (tok != Tok_Wrd)
         unexpected_expected("identifier");
-    const char *res = intern(tok_str, tok_len + 1);
+    struct string *res = intern(tok_str, tok_len + 1);
     lex();
-    return res;
+    return res->chars;
 }
 
 static int p_num() {
@@ -1461,8 +1235,8 @@ static struct expr *p_expr(int rbp) {
         acc->int_val = type_size(type);
     } else if (tok == Tok_Wrd) {
         acc = new_expr(&pos, Expr_Ident, 0);
-        acc->str_val = p_ident();
-        struct sym *sym = lookup(0, acc->str_val);
+        acc->name = p_ident();
+        struct sym *sym = lookup(0, acc->name);
         if (!sym)
             error_at(&pos, "undefined symbol");
     } else {
@@ -1539,11 +1313,11 @@ static struct expr *p_expr(int rbp) {
             acc = tmp;
         } else if (rbp < Prec_Postfix && eat(".")) {
             acc = new_unary_expr(&pos, Expr_Member, acc);
-            acc->str_val = p_ident();
+            acc->name = p_ident();
         } else if (rbp < Prec_Postfix && eat("->")) {
             acc = new_unary_expr(&pos, Expr_Deref, acc);
             acc = new_unary_expr(&pos, Expr_Member, acc);
-            acc->str_val = p_ident();
+            acc->name = p_ident();
         } else if (rbp < Prec_Postfix && eat("++")) {
             acc = new_unary_expr(&pos, Expr_PostInc, acc);
         } else if (rbp < Prec_Postfix && eat("--")) {
@@ -1567,14 +1341,14 @@ static struct stmt *p_stmt() {
         struct stmt *stmt = new_stmt(&pos, Stmt_Block);
         if (eat("}"))
             return stmt;
-        enter_scope(&pos);
+        push_scope();
         stmt->sub = p_stmt();
         struct stmt *tail = stmt->sub;
         while (!eat("}")) {
             tail->next = p_stmt();
             tail = tail->next;
         }
-        leave_scope();
+        pop_scope();
         return stmt;
     } else if (eat("return")) {
         struct stmt *stmt = new_stmt(&pos, Stmt_Return);
@@ -1600,14 +1374,14 @@ static struct stmt *p_stmt() {
         stmt->expr = elab_cond_expr(stmt->expr);
         expect(")");
 
-        enter_scope(&pos);
+        push_scope();
         stmt->sub = p_stmt();
-        leave_scope();
+        pop_scope();
 
         if (eat("else")) {
-            enter_scope(&pos);
+            push_scope();
             stmt->sub->next = p_stmt();
-            leave_scope();
+            pop_scope();
         }
 
         return stmt;
@@ -1621,37 +1395,27 @@ static struct stmt *p_stmt() {
 
         struct stmt *outer_loop = curr_loop;
         curr_loop = stmt;
-        enter_scope(&pos);
+        push_scope();
         stmt->sub = p_stmt();
-        leave_scope();
+        pop_scope();
         curr_loop = outer_loop;
 
         return stmt;
-    } else if (eat("break")) {
+    } else if (at("break") || at("continue")) {
         if (!curr_loop)
-            error_at(&pos, "break statement outside loop");
-        struct stmt *stmt = new_stmt(&pos, Stmt_Break);
-        stmt->sub = curr_loop;
-        expect(";");
-        return stmt;
-    } else if (eat("continue")) {
-        if (!curr_loop)
-            error_at(&pos, "continue statement outside loop");
-        struct stmt *stmt = new_stmt(&pos, Stmt_Continue);
+            error_at(&pos, "break/continue statement outside loop");
+        int kind = at("break") ? Stmt_Break : Stmt_Continue;
+        lex();
+        struct stmt *stmt = new_stmt(&pos, kind);
         stmt->sub = curr_loop;
         expect(";");
         return stmt;
     } else if (eat(";")) {
-        struct stmt *stmt = new_stmt(&pos, Stmt_Empty);
-        // empty statement
-        return stmt;
+        return new_stmt(&pos, Stmt_Empty);
     } else if (at_decl()) {
         struct stmt *stmt = 0;
         p_decl(Decl_Local, &stmt);
-        if (!stmt) {
-            stmt = new_stmt(&pos, Stmt_Empty);
-        }
-        return stmt;
+        return stmt ? stmt : new_stmt(&pos, Stmt_Empty);
     } else {
         struct stmt *stmt = new_stmt(&pos, Stmt_Expr);
         stmt->expr = p_expr(0);
@@ -1671,15 +1435,19 @@ static struct type *p_struct() {
 
     struct sym *sym = 0;
     if (!is_def) {
-        sym = lookup(Ns_Struct, name);
+        sym = lookup(1, name);
     }
 
     if (is_def || !sym) {
-        sym = declare_struct(&name_pos, name, is_def);
+        sym = declare(&name_pos, 0, Sym_Struct, 0, name, 0, is_def);
         if (eat("{")) {
+            sym->scope = push_scope();  // allocate an empty scope
+            pop_scope();
             while (!eat("}")) {
                 p_decl(Decl_Struct, sym);
             }
+            sym->is_defined = 1;
+            sym->size = align_up(sym->size, sym->align);
         }
     }
 
@@ -1701,7 +1469,7 @@ static struct type *p_enum() {
         if (!at("}")) {
             expect(",");
         }
-        define_const(&name_pos, name, val);
+        declare(&name_pos, 0, Sym_Const, 0, name, int_type, 1)->val = val;
         val++;
     }
     return int_type;
@@ -1709,15 +1477,15 @@ static struct type *p_enum() {
 
 extern void p_decl(int scope, void *ctx) {
     struct pos pos = tok_pos;
-    const char *storage_class = 0;
+    int storage_class = 0;
     struct type *base_type = 0;
     while (1) {
         if (eat("const")) {
             // ignored
         } else if (!storage_class && eat("static")) {
-            storage_class = "static";
+            storage_class = Static;
         } else if (!storage_class && eat("extern")) {
-            storage_class = "extern";
+            storage_class = Extern;
         } else if (!base_type && eat("void")) {
             base_type = void_type;
         } else if (!base_type && eat("int")) {
@@ -1738,14 +1506,12 @@ extern void p_decl(int scope, void *ctx) {
         error_at(&pos, "storage class specifier is not allowed here");
 
     int n_declarators = 0;
-    struct stmt *prev_local = 0;
     while (1) {
         struct type *type = base_type;
         const char *name = 0;
         int has_params = 0;
-        struct func_param params[MAX_FUNC_PARAMS];
+        struct sym *params[MAX_FUNC_PARAMS];
         int n_params = 0;
-        int has_func_body = 0;
         struct expr *init = 0;
 
         while (eat("*")) {
@@ -1759,19 +1525,24 @@ extern void p_decl(int scope, void *ctx) {
 
         // simplified grammar: either a function, array or object definition
         if (eat("(")) {
+            struct type *param_types[MAX_FUNC_PARAMS];
             has_params = 1;
             n_params = 0;
-            enter_scope(&name_pos);
+            push_scope();
             while (!eat(")")) {
                 if (n_params >= MAX_FUNC_PARAMS)
                     error_at(&name_pos, "too many parameters in function declaration");
                 if (n_params > 0) {
                     expect(",");
                 }
-                p_decl(Decl_Param, &params[n_params++]);
+                p_decl(Decl_Param, &params[n_params]);
+                param_types[n_params] = params[n_params]->type;
+                n_params++;
             }
-            leave_scope();
-            type = prototype_to_func_type(type, params, n_params);
+            if (!is_scalar(type) && !is_void_type(type))
+                error_at(&name_pos, "bad function return type");
+            type = new_func_type(type, param_types, n_params);
+            pop_scope();
         } else if (at("[")) {
             while (eat("[")) {
                 int len = p_const_expr();
@@ -1786,7 +1557,6 @@ extern void p_decl(int scope, void *ctx) {
             *(struct type **)ctx = type;
             return;  // max one type per abstract declaration
         } else if (scope == Decl_Param) {
-            struct func_param *param = (struct func_param *)ctx;
             if (is_array_type(type)) {
                 type = new_ptr_type(type->ptr_to);
             } else if (is_func_type(type)) {
@@ -1795,9 +1565,7 @@ extern void p_decl(int scope, void *ctx) {
 
             if (!is_scalar(type))
                 error_at(&name_pos, "bad parameter type");
-            param->type = type;
-            param->name_pos = name_pos;
-            param->name = name;
+            *(struct sym **)ctx = declare(&name_pos, 0, Sym_Local, 0, name, type, 1);
             return;  // max one parameter per declaration
         } else if (!name) {
             // declaration does not declare a function or object
@@ -1805,20 +1573,19 @@ extern void p_decl(int scope, void *ctx) {
             // function declaration
             if (scope != Decl_Global && scope != Decl_Local)
                 error_at(&name_pos, "function declaration is not allowed here");
-            int linkage = storage_class ? (storage_class[0] == 's' ? Internal : External) : 0;
-            has_func_body = scope == Decl_Global && n_declarators == 0 && at("{");
-            struct sym *sym = declare_func(&name_pos, linkage, name, type->ret_type, params, n_params, has_func_body);
+            int has_func_body = scope == Decl_Global && n_declarators == 0 && at("{");
+            struct sym *sym = declare(&name_pos, 0, Sym_Func, storage_class, name, type, has_func_body);
             if (has_func_body) {
-                reenter_scope();
+                sym->scope = push_scope();
                 int i = 0;
-                curr_func = sym;
                 while (i < n_params) {
-                    define_local(&params[i].name_pos, curr_func, params[i].name, params[i].type);
+                    declare(&params[i]->last_pos, sym, Sym_Local, 0, params[i]->name, params[i]->type, 1);
                     i++;
                 }
+                curr_func = sym;
                 sym->body = p_stmt();
                 curr_func = 0;
-                leave_scope();
+                pop_scope();
                 return;  // max one function definition per declaration
             }
         } else {
@@ -1831,23 +1598,19 @@ extern void p_decl(int scope, void *ctx) {
                 if (init) {
                     init = elab_expr_expect(init, type);
                 }
-                struct stmt *local = new_stmt(&pos, Stmt_Decl);
-                local->sym = define_local(&name_pos, curr_func, name, type);
-                local->expr = init;
-                if (!prev_local) {
-                    prev_local = *(struct stmt **)ctx = local;
-                } else {
-                    prev_local = prev_local->sub = local;
-                }
+                struct stmt *decl = new_stmt(&pos, Stmt_Decl);
+                decl->sym = declare(&name_pos, curr_func, Sym_Local, 0, name, type, 1);
+                decl->expr = init;
+                decl->sub = *(struct stmt **)ctx;
+                *(struct stmt **)ctx = decl;
             } else if (scope == Decl_Global) {
-                int linkage = storage_class ? (storage_class[0] == 's' ? Internal : External) : 0;
-                struct sym *sym = declare_global(&name_pos, linkage, name, type, !!init);
+                struct sym *sym = declare(&name_pos, 0, Sym_Global, storage_class, name, type, !!init);
                 if (init) {
                     sym->val = elab_init(init, type);
                 }
             } else if (scope == Decl_Struct) {
                 struct sym *sym = (struct sym *)ctx;
-                declare_field(&name_pos, sym, name, type);
+                declare(&name_pos, sym, Sym_Field, 0, name, type, 1);
             } else {
                 unreachable_case("p_decl (object declaration)", scope);
             }
@@ -1865,29 +1628,7 @@ extern void p_decl(int scope, void *ctx) {
 //=============================================================================
 //= codegen
 
-int next_loop_id;
-int next_cond_id;
-int next_str_id;
-
-struct emitted_str {
-    const char *str;
-    int label;
-    struct emitted_str *next;
-} *output_strs;
-
-int add_literal(const char *str) {
-    struct emitted_str *node = output_strs, *head = output_strs;
-    while (node) {
-        if (node->str == str)
-            return node->label;
-        node = node->next;
-    }
-    output_strs = alloc(sizeof(struct emitted_str));
-    output_strs->str = str;
-    output_strs->label = next_str_id++;
-    output_strs->next = head;
-    return output_strs->label;
-}
+int next_loop_id, next_cond_id, next_str_id;
 
 static const char *get_str_op(struct type *type) {
     if (type->kind == Type_Char)
@@ -1924,10 +1665,13 @@ static void emit_scalar_data(int size, int val) {
         unreachable_case("emit_data_scalar", size);
 }
 
-static void emit_str_load(const char *str) {
-    int label_id = add_literal(str);
-    write_f1(1, "adrp x0, .L.str.%d\n", &label_id);
-    write_f1(1, "add x0, x0, :lo12:.L.str.%d\n", &label_id);
+static void emit_str_load(struct string *str) {
+    if (!str->label) {
+        next_str_id++;
+        str->label = next_str_id;
+    }
+    write_f1(1, "adrp x0, .L.str.%d\n", &str->label);
+    write_f1(1, "add x0, x0, :lo12:.L.str.%d\n", &str->label);
 }
 
 static void emit_int_load(int val, int reg) {
@@ -1950,12 +1694,10 @@ static void emit_int_load(int val, int reg) {
 }
 
 static void emit_obj(struct sym *sym) {
-    int size, align;
-    type_layout(sym->type, &size, &align);
-
+    int size = type_size(sym->type), align = type_align(sym->type);
     if (size <= 8) {
         write_str(1, ".section .data\n");
-        if (sym->linkage == External) {
+        if (sym->storage_class == Extern) {
             write_f1(1, ".globl %s\n", sym->name);
         }
         write_f1(1, ".balign %d\n", &align);
@@ -1966,7 +1708,7 @@ static void emit_obj(struct sym *sym) {
             emit_scalar_data(size, 0);
         }
     } else {
-        if (sym->linkage == External) {
+        if (sym->storage_class == Extern) {
             write_f1(1, ".globl %s\n", sym->name);
         }
         write_str(1, ".section .bss\n");
@@ -1976,31 +1718,13 @@ static void emit_obj(struct sym *sym) {
     }
 }
 
-int layout_func(struct sym *sym) {
-    int slots_size = 0;
-    int i = 0;
-    while (i < sym->n_locals) {
-        struct sym *local = sym->locals[i];
-        int size, align;
-        type_layout(local->type, &size, &align);
-        local->offset = -align_up(slots_size + size, align);
-        slots_size = -local->offset;
-        i++;
-    }
-
-    slots_size = align_up(slots_size, 16);
-    return slots_size;
-}
-
-static void emit_slot_write(int i, int reg) {
-    struct sym *local = curr_func->locals[i];
+static void emit_slot_write(struct sym *local, int reg) {
     const char *op = get_str_op(local->type);
     emit_int_load(local->offset, 9);
     write_f2(1, "%s%d, [x29, x9]\n", op, &reg);
 }
 
-static void emit_slot_addr(int i, int reg) {
-    struct sym *local = curr_func->locals[i];
+static void emit_slot_addr(struct sym *local, int reg) {
     emit_int_load(local->offset, 9);
     write_f1(1, "add x%d, x29, x9\n", &reg);
 }
@@ -2044,7 +1768,6 @@ static void emit_binary_operands(struct expr *expr) {
 
 static void emit_short_circuit_expr(struct expr *expr, const char *cond) {
     int cond_id = next_cond_id++;
-    write_f1(1, ".L.cond.%d:\n", &cond_id);
     emit_scalar_expr(expr->subs[0]);
     write_f2(1, "cb%s x0, .L.cond.%d.short\n", cond, &cond_id);
     emit_scalar_expr(expr->subs[1]);
@@ -2100,7 +1823,7 @@ static void emit_place_expr(struct expr *expr) {
     if (k == Expr_Ident) {
         struct sym *sym = expr->sym;
         if (sym->kind == Sym_Global || sym->kind == Sym_Func) {
-            if (sym->linkage == External && !sym->is_defined) {
+            if (sym->storage_class == Extern && !sym->is_defined) {
                 write_f1(1, "adrp x0, :got:%s\n", sym->name);
                 write_f1(1, "ldr x0, [x0, :got_lo12:%s]\n", sym->name);
             } else {
@@ -2108,13 +1831,13 @@ static void emit_place_expr(struct expr *expr) {
                 write_f1(1, "add x0, x0, :lo12:%s\n", sym->name);
             }
         } else if (sym->kind == Sym_Local) {
-            emit_slot_addr(sym->slot_idx, 0);
+            emit_slot_addr(sym, 0);
         } else {
             unreachable_case("emit_place_expr (ident)", sym->kind);
         }
     } else if (k == Expr_Member) {
         emit_place_expr(expr->subs[0]);
-        emit_int_load(expr->field->offset, 1);
+        emit_int_load(expr->sym->offset, 1);
         write_str(1, "add x0, x0, x1\n");
     } else if (k == Expr_Deref) {
         emit_scalar_expr(expr->subs[0]);
@@ -2136,10 +1859,7 @@ static void emit_scalar_expr(struct expr *expr) {
         emit_str_load(expr->str_val);
     } else if (k == Expr_PostDec || k == Expr_PostInc) {
         const char *op = k == Expr_PostInc ? "add" : "sub";
-        int step = 1;
-        if (is_ptr_type(expr->type)) {
-            step = type_size(expr->type->ptr_to);
-        }
+        int step = is_ptr_type(expr->type) ? type_size(expr->type->ptr_to) : 1;
         emit_place_expr(expr->subs[0]);
         write_str(1, "mov x2, x0\n");
         emit_load(expr->type, 0, 0);
@@ -2162,8 +1882,7 @@ static void emit_scalar_expr(struct expr *expr) {
         // values in registers are always full width, so
         // narrowing casts can simply truncate the value.
         emit_scalar_expr(expr->subs[0]);
-        int target_size = type_size(expr->type);
-        if (target_size < 8) {
+        if (type_size(expr->type) < 8) {
             emit_sext(expr->type, 0);
         }
     } else if (k == Expr_Mod) {
@@ -2223,7 +1942,6 @@ static void emit_scalar_expr(struct expr *expr) {
         }
     } else if (k == Expr_Cond) {
         int cond_id = next_cond_id++;
-        write_f1(1, ".L.cond.%d:\n", &cond_id);
         emit_scalar_expr(expr->subs[0]);
         write_f1(1, "cbz x0, .L.cond.%d.else\n", &cond_id);
         emit_scalar_expr(expr->subs[1]);
@@ -2235,14 +1953,12 @@ static void emit_scalar_expr(struct expr *expr) {
         emit_place_expr(expr->subs[0]);
         emit_assign_to_addr(expr->type, expr->subs[1]);
     } else if (k == Expr_Call) {
-        struct expr *fn = expr->subs[0];
-        struct expr **args = &expr->subs[1];
+        struct expr *fn = expr->subs[0], **args = &expr->subs[1];
         int argc = expr->n_subs - 1;
 
-        struct sym *func_sym = 0;
-        if (fn->kind == Expr_Addr && fn->subs[0]->kind == Expr_Ident && fn->subs[0]->sym->kind == Sym_Func) {
-            func_sym = fn->subs[0]->sym;
-        }
+        assert("emit_scalar_expr: func_sym",
+               fn->kind == Expr_Addr && fn->subs[0]->kind == Expr_Ident && fn->subs[0]->sym->kind == Sym_Func);
+        struct sym *func_sym = fn->subs[0]->sym;
 
         int i = 0;
         while (i < argc) {
@@ -2250,8 +1966,7 @@ static void emit_scalar_expr(struct expr *expr) {
             emit_push(0);
             i++;
         }
-        while (i > 0) {
-            i--;
+        while (i-- > 0) {
             emit_pop(i);
         }
         write_f1(1, "bl %s\n", func_sym->name);
@@ -2275,6 +1990,16 @@ static void emit_effect_expr(struct expr *expr) {
         emit_place_expr(expr);
     } else {
         unreachable_case("emit_effect_expr", expr->kind);
+    }
+}
+
+static void emit_init_decls(struct stmt *stmt) {
+    if (!stmt)
+        return;
+    emit_init_decls(stmt->sub);
+    if (stmt->expr) {
+        emit_slot_addr(stmt->sym, 0);
+        emit_assign_to_addr(stmt->sym->type, stmt->expr);
     }
 }
 
@@ -2316,42 +2041,33 @@ static void emit_stmt(struct stmt *stmt) {
         write_f1(1, "b .L.loop.%d.end\n", &stmt->sub->loop_id);
     } else if (k == Stmt_Continue) {
         write_f1(1, "b .L.loop.%d.cond\n", &stmt->sub->loop_id);
-    } else if (k == Stmt_Empty) {
-        // pass
     } else if (k == Stmt_Decl) {
-        struct stmt *decl = stmt;
-        while (decl) {
-            if (decl->expr) {
-                emit_slot_addr(decl->sym->slot_idx, 0);
-                if (decl->expr) {
-                    emit_assign_to_addr(decl->sym->type, decl->expr);
-                }
-            }
-            decl = decl->sub;
-        }
+        emit_init_decls(stmt);
     } else if (k == Stmt_Expr) {
         emit_effect_expr(stmt->expr);
-    } else {
+    } else if (k != Stmt_Empty) {
         unreachable_case("emit_stmt", k);
     }
 }
 
 static void emit_func(struct sym *func) {
     curr_func = func;
-    int slots_size = layout_func(func);
+    curr_func->size = align_up(curr_func->size, 16);
 
     write_str(1, ".text\n");
-    if (func->linkage != Internal) {
+    if (func->storage_class != Static) {
         write_f1(1, ".globl %s\n", func->name);
     }
     write_f1(1, "%s:\n", func->name);
     // prologue
     write_str(1, "stp x29, x30, [sp, #-16]!\n");
     write_str(1, "mov x29, sp\n");
-    write_f1(1, "sub sp, sp, #%d\n", &slots_size);
+    write_f1(1, "sub sp, sp, #%d\n", &curr_func->size);
     int i = 0;
+    struct sym *sym = func->scope->head;
     while (i < func->type->n_params) {
-        emit_slot_write(i, i);
+        emit_slot_write(sym, i);
+        sym = sym->next;
         i++;
     }
     // body
@@ -2381,16 +2097,18 @@ static void emit_memcpy() {
 
 static void emit_str_literals() {
     write_str(1, ".section .rodata\n");
-    struct emitted_str *node = output_strs;
-    while (node) {
-        const char *str = node->str;
-        write_f1(1, ".L.str.%d:\n", &node->label);
-        int c;
-        while ((c = *str++)) {
-            write_f1(1, ".byte %d\n", &c);
+    struct string *str = strings;
+    while (str) {
+        if (str->label) {
+            const char *chars = str->chars;
+            write_f1(1, ".L.str.%d:\n", &str->label);
+            int c;
+            while ((c = *chars++)) {
+                write_f1(1, ".byte %d\n", &c);
+            }
+            write_str(1, ".byte 0\n");
         }
-        write_str(1, ".byte 0\n");
-        node = node->next;
+        str = str->next;
     }
 }
 
@@ -2398,68 +2116,52 @@ static void emit_str_literals() {
 //= main
 
 int main(int argc, char **argv) {
-    int quiet = 1;
-    const char *file_name = 0;
-    int i = 1;
-    while (i < argc) {
-        if (str_eq(argv[i], "-v")) {
-            quiet = 0;
-        } else if (!file_name) {
-            file_name = argv[i];
-        } else {
-            write_f1(2, "error: unrecognized argument '%s'\n", argv[i]);
-            return 1;
-        }
-        i++;
-    }
-    if (!file_name) {
-        write_str(2, "input file not specified\n");
+    if (argc != 2) {
+        write_str(2, "usage: minicc <file>\n");
         return 1;
     }
+    const char *file_name = argv[1];
     if ((inp = open(file_name, 0, 0)) < 0) {
         write_f1(2, "error: cannot open file '%s'\n", file_name);
         return 1;
     }
 
-    type_init();
-    lex_init(file_name);
-    parse_init();
-    curr_scope = scopes;
+    init_types();
+
+    // lexer
+    chr_pos.file = file_name;
+    chr_pos.line = chr_pos.col = 1;
+    next_chr();
+
+    // parser
+    lex();
+
+    push_scope();
+
     while (tok != EOF) {
         p_decl(Decl_Global, 0);
     }
 
-    int n_funcs = 0, n_objs = 0;
-    struct sym *syms = scopes[0].syms;
+    struct sym *syms = curr_scope->head;
     while (syms) {
         struct sym *sym = syms;
         syms = syms->next;
         if (sym->kind == Sym_Func) {
-            if (sym->linkage != Internal && !sym->is_defined)
+            if (sym->storage_class != Static && !sym->is_defined)
                 continue;  // declaration, external linkage
-            if (sym->linkage == Internal && !sym->is_defined)
+            if (sym->storage_class == Static && !sym->is_defined)
                 continue;  // declaration with internal linkage, missing definition
             emit_func(sym);
-            n_funcs++;
         } else if (sym->kind == Sym_Global) {
-            if (sym->linkage == External && !sym->is_defined)
+            if (sym->storage_class == Extern && !sym->is_defined)
                 continue;  // declaration, external linkage
             if (!sym->is_defined)
                 ;  // tentative definition
             emit_obj(sym);
-            n_objs++;
         }
     }
     emit_memcpy();
     emit_str_literals();
-
-    if (!quiet) {
-        write_f2(2, "generated %d functions and %d objects\n", &n_funcs, &n_objs);
-        write_f1(2, "allocated %d bytes from arena\n", &arena_len);
-        write_f1(2, "allocated %d types\n", &n_types);
-        write_f1(2, "allocated %d symbols\n", &n_syms);
-        write_f1(2, "interned %d strings\n", &strings_len);
-    }
 
     return 0;
 }
