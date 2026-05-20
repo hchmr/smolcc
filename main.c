@@ -920,7 +920,7 @@ static struct expr *elab_expr(struct expr *e) {
             error_at(&e->pos, "operands must have scalar types");
         e->type = int_type;
     } else if (k == Expr_Cond) {
-        apply_null_ptr_conversion(e->subs);
+        apply_null_ptr_conversion(e->subs + 1);
         if (is_void_type(e->subs[1]->type) && is_void_type(e->subs[2]->type)) {
             // pass
         } else if (is_integer_type(e->subs[1]->type) && is_integer_type(e->subs[2]->type)) {
