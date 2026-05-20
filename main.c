@@ -64,10 +64,7 @@ static void write_f_(int fd, const char *fmt, const char **args) {
 
 static void write_f4(int fd, const char *fmt, const void *x1, const void *x2, const void *x3, const void *x4) {
     const char *args[4];
-    args[0] = x1;
-    args[1] = x2;
-    args[2] = x3;
-    args[3] = x4;
+    args[0] = x1, args[1] = x2, args[2] = x3, args[3] = x4;
     write_f_(fd, fmt, args);
 }
 
@@ -428,11 +425,10 @@ static struct sym *add_sym(struct pos *pos, struct scope *scope, int kind, const
     sym->name = name;
     sym->last_pos = *pos;
     if (scope->head) {
-        scope->tail->next = sym;
+        scope->tail->next = sym, scope->tail = sym;
     } else {
-        scope->head = sym;
+        scope->head = scope->tail = sym;
     }
-    scope->tail = sym;
     return sym;
 }
 
@@ -513,7 +509,8 @@ static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, in
 //= ast
 
 enum {
-    Expr_Assign = 1,
+    Expr_Comma = 1,
+    Expr_Assign,
     Expr_Cond,
     Expr_Or,
     Expr_And,
@@ -848,8 +845,7 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (k == Expr_Mul || k == Expr_Div || k == Expr_Mod || k == Expr_Add || k == Expr_Sub) {
         if (k == Expr_Add && is_integer_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
             void *tmp = e->subs[0];
-            e->subs[0] = e->subs[1];
-            e->subs[1] = tmp;
+            e->subs[0] = e->subs[1], e->subs[1] = tmp;
         }
         if (k == Expr_Add && is_ptr_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
             e->kind = Expr_PtrAdd;
@@ -917,6 +913,8 @@ static struct expr *elab_expr(struct expr *e) {
             error_at(&e->pos, "operand must be assignable");
         e->subs[1] = apply_assignment_conversion(e->subs[1], e->subs[0]->type);
         e->type = e->subs[0]->type;
+    } else if (k == Expr_Comma) {
+        e->type = e->subs[1]->type;
     } else {
         unreachable_case("elab_expr", k);
     }
@@ -982,8 +980,7 @@ static struct {
 
 static void next_chr() {
     if (chr == '\n') {
-        chr_pos.line++;
-        chr_pos.col = 1;
+        chr_pos.line++, chr_pos.col = 1;
     } else {
         chr_pos.col++;
     }
@@ -995,8 +992,7 @@ static void next_chr() {
 
 static void lex() {
     while (1) {
-        tok_len = 0;
-        tok_pos = chr_pos;
+        tok_len = 0, tok_pos = chr_pos;
         if (chr == EOF) {
             tok = EOF;
         } else if (chr == ' ' || chr == '\t' || chr == '\n') {
@@ -1144,7 +1140,8 @@ static struct type *p_typename() {
 }
 
 enum {
-    Prec_Assign = 1,
+    Prec_Comma = 1,
+    Prec_Assign,
     Prec_Cond,
     Prec_Or,
     Prec_And,
@@ -1226,7 +1223,9 @@ static struct expr *p_expr(int rbp) {
 
     // led
     while (1) {
-        if (rbp < Prec_Assign && eat("=")) {
+        if (rbp < Prec_Comma && eat(",")) {
+            acc = p_bin_expr(acc, Expr_Comma, 0);
+        } else if (rbp < Prec_Assign && eat("=")) {
             acc = p_bin_expr(acc, Expr_Assign, Prec_Assign - 1);
         } else if (rbp < Prec_Cond && eat("?")) {
             struct expr *mid = p_expr(0);
@@ -1288,7 +1287,7 @@ static struct expr *p_expr(int rbp) {
                 if (n_args > 0) {
                     expect(",");
                 }
-                args[n_args++] = p_expr(0);
+                args[n_args++] = p_expr(Prec_Comma);
             }
             tmp->n_subs = n_args + 1;
             acc = tmp;
@@ -1326,8 +1325,7 @@ static struct stmt *p_stmt() {
         stmt->sub = p_stmt();
         struct stmt *tail = stmt->sub;
         while (!eat("}")) {
-            tail->next = p_stmt();
-            tail = tail->next;
+            tail->next = p_stmt(), tail = tail->next;
         }
         pop_scope();
         return stmt;
@@ -1556,7 +1554,7 @@ extern void p_decl(int scope, void *ctx) {
                 type = new_array_type(type, len);
             }
         } else if (eat("=") && (scope == Decl_Global || scope == Decl_Local)) {
-            init = p_expr(0);
+            init = p_expr(Prec_Comma);
         }
 
         if (scope == Decl_TypeName) {
@@ -1679,7 +1677,7 @@ static void emit_str_load(struct string *str) {
 static void emit_int_load(int val, int reg) {
     int chunk_mask = (1 << 16) - 1;
     int default_chunk_value = val < 0 ? chunk_mask : 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++, val = val >> 16) {
         int chunk = val & chunk_mask;
         if (i == 0) {
             const char *mov_op = val < 0 ? "movn" : "movz";
@@ -1689,7 +1687,6 @@ static void emit_int_load(int val, int reg) {
             int shift = i * 16;
             write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
         }
-        val = val >> 16;
     }
 }
 
@@ -1815,6 +1812,22 @@ static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
         emit_pop(0);
         emit_int_load(type_size(dst_type), 2);
         write_str(1, "bl memcpy\n");
+    }
+}
+
+static void emit_effect_expr(struct expr *expr) {
+    if (expr->kind == Expr_Assign) {
+        emit_place_expr(expr->subs[0]);
+        emit_assign_to_addr(expr->type, expr->subs[1]);
+    } else if (expr->kind == Expr_Comma) {
+        emit_effect_expr(expr->subs[0]);
+        emit_effect_expr(expr->subs[1]);
+    } else if (is_scalar(expr->type) || is_void_type(expr->type)) {
+        emit_scalar_expr(expr);
+    } else if (is_lvalue(expr)) {
+        emit_place_expr(expr);
+    } else {
+        unreachable_case("emit_effect_expr", expr->kind);
     }
 }
 
@@ -1973,21 +1986,11 @@ static void emit_scalar_expr(struct expr *expr) {
         if (is_scalar(expr->type) && type_size(expr->type) < 8) {
             emit_sext(expr->type, 0);
         }
+    } else if (k == Expr_Comma) {
+        emit_effect_expr(expr->subs[0]);
+        emit_scalar_expr(expr->subs[1]);
     } else {
         unreachable_case("emit_scalar_expr", k);
-    }
-}
-
-static void emit_effect_expr(struct expr *expr) {
-    if (expr->kind == Expr_Assign) {
-        emit_place_expr(expr->subs[0]);
-        emit_assign_to_addr(expr->type, expr->subs[1]);
-    } else if (is_scalar(expr->type) || is_void_type(expr->type)) {
-        emit_scalar_expr(expr);
-    } else if (is_lvalue(expr)) {
-        emit_place_expr(expr);
-    } else {
-        unreachable_case("emit_effect_expr", expr->kind);
     }
 }
 
@@ -2067,9 +2070,8 @@ static void emit_func(struct sym *func) {
     write_str(1, "mov x29, sp\n");
     write_f1(1, "sub sp, sp, #%d\n", &curr_func->size);
     struct sym *sym = func->scope->head;
-    for (int i = 0; i < func->type->n_params; i++) {
+    for (int i = 0; i < func->type->n_params; i++, sym = sym->next) {
         emit_slot_write(sym, i);
-        sym = sym->next;
     }
     // body
     emit_stmt(func->body);
