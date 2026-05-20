@@ -341,17 +341,13 @@ static struct type *int_type;
 
 static void type_layout(struct type *ty, int *size, int *align) {
     if (ty->kind == Type_Void) {
-        *size = 0;
-        *align = 0;
+        *size = *align = 0;
     } else if (ty->kind == Type_Char) {
-        *size = 1;
-        *align = 1;
+        *size = *align = 1;
     } else if (ty->kind == Type_Int) {
-        *size = 4;
-        *align = 4;
+        *size = *align = 4;
     } else if (ty->kind == Type_Ptr) {
-        *size = 8;
-        *align = 8;
+        *size = *align = 8;
     } else if (ty->kind == Type_Array) {
         int elem_size, elem_align;
         type_layout(ty->ptr_to, &elem_size, &elem_align);
@@ -376,8 +372,7 @@ static void type_layout(struct type *ty, int *size, int *align) {
             *size = align_up(*size, max_align);
         *align = max_align;
     } else if (ty->kind == Type_Func) {
-        *size = 0;
-        *align = 0;
+        *size = *align = 0;
     } else {
         unreachable_case("type_layout", ty->kind);
     }
@@ -1235,8 +1230,7 @@ static void next_chr() {
 
 static void lex_init(const char *file) {
     chr_pos.file = file;
-    chr_pos.line = 1;
-    chr_pos.col = 1;
+    chr_pos.line = chr_pos.col = 1;
     next_chr();
 }
 
