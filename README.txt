@@ -6,7 +6,7 @@ aarch64-unknown-linux. Around 2k lines of code.
 Basic support for the following features:
 - types: void, char, int, pointer, array, struct
 - global declarations: functions, globals, structs, enums
-- statements: declarations, if, while, break, continue, return
+- statements: declarations, if, while, for, break, continue, return
 
 No preprocessor, typedefs, varargs, etc.
 

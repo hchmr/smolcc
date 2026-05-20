@@ -43,7 +43,7 @@ static void write_int(int fd, int n) {
 }
 
 static void write_f_(int fd, const char *fmt, const char **args) {
-    while (*fmt) {
+    for (; *fmt; fmt++) {
         if (*fmt == '%') {
             fmt++;
             if (*fmt == 'd') {
@@ -59,7 +59,6 @@ static void write_f_(int fd, const char *fmt, const char **args) {
         } else {
             write_char(fd, *fmt);
         }
-        fmt++;
     }
 }
 
@@ -106,11 +105,9 @@ static int align_up(int n, int align) {
 }
 
 static const char *find_chr(const char *s, int c) {
-    while (*s) {
+    for (; *s; s++)
         if (c == *s)
             return s;
-        s++;
-    }
     return 0;
 }
 
@@ -148,9 +145,9 @@ static void *alloc(int len) {
 
 static void *mem_clone(void *s, int len) {
     void *res = alloc(len);
-    int i = 0;
-    while (i++ < len)
-        ((char *)res)[i - 1] = ((char *)s)[i - 1];
+    for (int i = 0; i < len; i++) {
+        ((char *)res)[i] = ((char *)s)[i];
+    }
     return res;
 }
 
@@ -161,12 +158,9 @@ static struct string {
 } *strings;
 
 struct string *intern(const char *s, int len) {
-    struct string *str = strings;
-    while (str) {
+    for (struct string *str = strings; str; str = str->next)
         if (str_eq(str->chars, s))
             return str;
-        str = str->next;
-    }
     struct string *new_str = alloc(sizeof(struct string));
     new_str->chars = mem_clone((void *)s, len + 1);
     new_str->len = len;
@@ -304,9 +298,8 @@ static int type_eq(struct type *a, struct type *b) {
     } else if (a->kind == Type_Func) {
         if (a->ret_type != b->ret_type || a->n_params != b->n_params)
             return 0;
-        int i = 0;
-        while (i++ < a->n_params) {
-            if (a->param_types[i - 1] != b->param_types[i - 1])
+        for (int i = 0; i < a->n_params; i++) {
+            if (a->param_types[i] != b->param_types[i])
                 return 0;
         }
         return 1;
@@ -343,13 +336,10 @@ static int is_object_type(struct type *ty) {
 }
 
 static struct type *intern_type(struct type *ty) {
-    struct type *t = types;
-    while (t) {
+    for (struct type *t = types; t; t = t->next)
         if (type_eq(t, ty))
             return t;
-        t = t->next;
-    }
-    t = mem_clone(ty, sizeof(struct type));
+    struct type *t = mem_clone(ty, sizeof(struct type));
     t->next = types;
     types = t;
     return t;
@@ -381,9 +371,8 @@ static struct type *new_func_type(struct type *ret_type, struct type **param_typ
     struct type ty;
     ty.kind = Type_Func;
     ty.ret_type = ret_type;
-    int i = 0;
-    while (i++ < n_params) {
-        ty.param_types[i - 1] = param_types[i - 1];
+    for (int i = 0; i < n_params; i++) {
+        ty.param_types[i] = param_types[i];
     }
     ty.n_params = n_params;
     return intern_type(&ty);
@@ -450,23 +439,19 @@ static struct sym *add_sym(struct pos *pos, struct scope *scope, int kind, const
 static struct sym *lookup_in(struct scope *scope, int is_struct, const char *name) {
     if (!name)
         return 0;
-    struct sym *sym = scope->head;
-    while (sym) {
+    for (struct sym *sym = scope->head; sym; sym = sym->next) {
         int sym_is_struct = sym->kind == Sym_Struct;
         if (sym_is_struct == is_struct && sym->name == name)
             return sym;
-        sym = sym->next;
     }
     return 0;
 }
 
 static struct sym *lookup(int ns, const char *name) {
-    struct scope *s = curr_scope;
-    while (s) {
+    for (struct scope *s = curr_scope; s; s = s->parent) {
         struct sym *sym = lookup_in(s, ns, name);
         if (sym)
             return sym;
-        s = s->parent;
     }
     return 0;
 }
@@ -584,7 +569,7 @@ enum {
     Stmt_Block,
     Stmt_Decl,
     Stmt_If,
-    Stmt_While,
+    Stmt_Loop,
     Stmt_Return,
     Stmt_Break,
     Stmt_Continue,
@@ -773,13 +758,11 @@ static struct expr *ptr_decay(struct expr *e) {
 static struct expr *elab_expr(struct expr *e);
 
 static void elab_subexprs(struct expr *e) {
-    int i = 0;
-    while (i < e->n_subs) {
+    for (int i = 0; i < e->n_subs; i++) {
         e->subs[i] = elab_expr(e->subs[i]);
         if (e->kind != Expr_Addr) {
             e->subs[i] = ptr_decay(e->subs[i]);
         }
-        i++;
     }
 }
 
@@ -828,10 +811,8 @@ static struct expr *elab_expr(struct expr *e) {
             error_at(&e->pos, "too many arguments in function call");
         if (n_args < func->n_params)
             error_at(&e->pos, "too few arguments in function call");
-        int i = 0;
-        while (i < n_args) {
+        for (int i = 0; i < n_args; i++) {
             args[i] = apply_assignment_conversion(args[i], func->param_types[i]);
-            i++;
         }
         e->type = func->ret_type;
     } else if (k == Expr_Member) {
@@ -1385,21 +1366,51 @@ static struct stmt *p_stmt() {
         }
 
         return stmt;
-    } else if (eat("while")) {
-        struct stmt *stmt = new_stmt(&pos, Stmt_While);
+    } else if (at("for") || at("while")) {
+        int is_while = at("while");
+        lex();
+        struct stmt *stmt = new_stmt(&pos, Stmt_Loop);
 
+        push_scope();
         expect("(");
-        stmt->expr = p_expr(0);
-        stmt->expr = elab_cond_expr(stmt->expr);
+        if (is_while) {
+            stmt->expr = elab_cond_expr(p_expr(0));
+            stmt->sub = new_stmt(&pos, Stmt_Empty);
+            stmt->sub->next = new_stmt(&pos, Stmt_Empty);
+        } else {
+            if (eat(";")) {
+                stmt->sub = new_stmt(&pos, Stmt_Empty);
+            } else if (at_decl()) {
+                stmt->sub = p_stmt();
+            } else {
+                stmt->sub = new_stmt(&pos, Stmt_Expr);
+                stmt->sub->expr = elab_rvalue_expr(p_expr(0));
+                expect(";");
+            }
+
+            if (!at(";")) {
+                stmt->expr = elab_cond_expr(p_expr(0));
+            }
+            expect(";");
+
+            if (!at(")")) {
+                stmt->sub->next = new_stmt(&pos, Stmt_Expr);
+                stmt->sub->next->expr = elab_rvalue_expr(p_expr(0));
+            } else {
+                stmt->sub->next = new_stmt(&pos, Stmt_Empty);
+            }
+        }
         expect(")");
 
         struct stmt *outer_loop = curr_loop;
         curr_loop = stmt;
         push_scope();
-        stmt->sub = p_stmt();
+        struct stmt *body = p_stmt();
+        pop_scope();
         pop_scope();
         curr_loop = outer_loop;
 
+        stmt->sub->next->next = body;
         return stmt;
     } else if (at("break") || at("continue")) {
         if (!curr_loop)
@@ -1459,8 +1470,7 @@ static struct type *p_struct() {
 
 static struct type *p_enum() {
     expect("{");
-    int val = 0;
-    while (!eat("}")) {
+    for (int val = 0; !eat("}"); val++) {
         struct pos name_pos = tok_pos;
         const char *name = p_ident();
         if (eat("=")) {
@@ -1470,7 +1480,6 @@ static struct type *p_enum() {
             expect(",");
         }
         declare(&name_pos, 0, Sym_Const, 0, name, int_type, 1)->val = val;
-        val++;
     }
     return int_type;
 }
@@ -1505,8 +1514,7 @@ extern void p_decl(int scope, void *ctx) {
     if (storage_class && scope != Decl_Global)
         error_at(&pos, "storage class specifier is not allowed here");
 
-    int n_declarators = 0;
-    while (1) {
+    for (int n_declarators = 0;; n_declarators++) {
         struct type *type = base_type;
         const char *name = 0;
         int has_params = 0;
@@ -1527,9 +1535,8 @@ extern void p_decl(int scope, void *ctx) {
         if (eat("(")) {
             struct type *param_types[MAX_FUNC_PARAMS];
             has_params = 1;
-            n_params = 0;
             push_scope();
-            while (!eat(")")) {
+            for (n_params = 0; !eat(")"); n_params++) {
                 if (n_params >= MAX_FUNC_PARAMS)
                     error_at(&name_pos, "too many parameters in function declaration");
                 if (n_params > 0) {
@@ -1537,7 +1544,6 @@ extern void p_decl(int scope, void *ctx) {
                 }
                 p_decl(Decl_Param, &params[n_params]);
                 param_types[n_params] = params[n_params]->type;
-                n_params++;
             }
             if (!is_scalar(type) && !is_void_type(type))
                 error_at(&name_pos, "bad function return type");
@@ -1577,10 +1583,8 @@ extern void p_decl(int scope, void *ctx) {
             struct sym *sym = declare(&name_pos, 0, Sym_Func, storage_class, name, type, has_func_body);
             if (has_func_body) {
                 sym->scope = push_scope();
-                int i = 0;
-                while (i < n_params) {
+                for (int i = 0; i < n_params; i++) {
                     declare(&params[i]->last_pos, sym, Sym_Local, 0, params[i]->name, params[i]->type, 1);
-                    i++;
                 }
                 curr_func = sym;
                 sym->body = p_stmt();
@@ -1620,8 +1624,6 @@ extern void p_decl(int scope, void *ctx) {
             expect(";");
             return;
         }
-
-        n_declarators++;
     }
 }
 
@@ -1677,8 +1679,7 @@ static void emit_str_load(struct string *str) {
 static void emit_int_load(int val, int reg) {
     int chunk_mask = (1 << 16) - 1;
     int default_chunk_value = val < 0 ? chunk_mask : 0;
-    int i = 0;
-    while (i < 4) {
+    for (int i = 0; i < 4; i++) {
         int chunk = val & chunk_mask;
         if (i == 0) {
             const char *mov_op = val < 0 ? "movn" : "movz";
@@ -1688,7 +1689,6 @@ static void emit_int_load(int val, int reg) {
             int shift = i * 16;
             write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
         }
-        i++;
         val = val >> 16;
     }
 }
@@ -1960,13 +1960,11 @@ static void emit_scalar_expr(struct expr *expr) {
                fn->kind == Expr_Addr && fn->subs[0]->kind == Expr_Ident && fn->subs[0]->sym->kind == Sym_Func);
         struct sym *func_sym = fn->subs[0]->sym;
 
-        int i = 0;
-        while (i < argc) {
+        for (int i = 0; i < argc; i++) {
             emit_scalar_expr(args[i]);
             emit_push(0);
-            i++;
         }
-        while (i-- > 0) {
+        for (int i = argc; i-- > 0;) {
             emit_pop(i);
         }
         write_f1(1, "bl %s\n", func_sym->name);
@@ -2007,10 +2005,8 @@ static void emit_stmt(struct stmt *stmt) {
     write_f3(1, "// %s:%d:%d\n", stmt->pos.file, &stmt->pos.line, &stmt->pos.col);  // debug info
     int k = stmt->kind;
     if (k == Stmt_Block) {
-        struct stmt *sub = stmt->sub;
-        while (sub) {
+        for (struct stmt *sub = stmt->sub; sub; sub = sub->next) {
             emit_stmt(sub);
-            sub = sub->next;
         }
     } else if (k == Stmt_Return) {
         if (stmt->expr) {
@@ -2028,19 +2024,26 @@ static void emit_stmt(struct stmt *stmt) {
             emit_stmt(stmt->sub->next);
         }
         write_f1(1, ".L.if.%d.end:\n", &cond_id);
-    } else if (k == Stmt_While) {
+    } else if (k == Stmt_Loop) {
         stmt->loop_id = next_loop_id++;
+        emit_stmt(stmt->sub);
         write_f1(1, "b .L.loop.%d.cond\n", &stmt->loop_id);
         write_f1(1, ".L.loop.%d.body:\n", &stmt->loop_id);
-        emit_stmt(stmt->sub);
+        emit_stmt(stmt->sub->next->next);
+        write_f1(1, ".L.loop.%d.step:\n", &stmt->loop_id);
+        emit_stmt(stmt->sub->next);
         write_f1(1, ".L.loop.%d.cond:\n", &stmt->loop_id);
-        emit_scalar_expr(stmt->expr);
-        write_f1(1, "cbnz x0, .L.loop.%d.body\n", &stmt->loop_id);
+        if (stmt->expr) {
+            emit_scalar_expr(stmt->expr);
+            write_f1(1, "cbnz x0, .L.loop.%d.body\n", &stmt->loop_id);
+        } else {
+            write_f1(1, "b .L.loop.%d.body\n", &stmt->loop_id);
+        }
         write_f1(1, ".L.loop.%d.end:\n", &stmt->loop_id);
     } else if (k == Stmt_Break) {
         write_f1(1, "b .L.loop.%d.end\n", &stmt->sub->loop_id);
     } else if (k == Stmt_Continue) {
-        write_f1(1, "b .L.loop.%d.cond\n", &stmt->sub->loop_id);
+        write_f1(1, "b .L.loop.%d.step\n", &stmt->sub->loop_id);
     } else if (k == Stmt_Decl) {
         emit_init_decls(stmt);
     } else if (k == Stmt_Expr) {
@@ -2063,12 +2066,10 @@ static void emit_func(struct sym *func) {
     write_str(1, "stp x29, x30, [sp, #-16]!\n");
     write_str(1, "mov x29, sp\n");
     write_f1(1, "sub sp, sp, #%d\n", &curr_func->size);
-    int i = 0;
     struct sym *sym = func->scope->head;
-    while (i < func->type->n_params) {
+    for (int i = 0; i < func->type->n_params; i++) {
         emit_slot_write(sym, i);
         sym = sym->next;
-        i++;
     }
     // body
     emit_stmt(func->body);
@@ -2097,18 +2098,15 @@ static void emit_memcpy() {
 
 static void emit_str_literals() {
     write_str(1, ".section .rodata\n");
-    struct string *str = strings;
-    while (str) {
-        if (str->label) {
-            const char *chars = str->chars;
-            write_f1(1, ".L.str.%d:\n", &str->label);
-            int c;
-            while ((c = *chars++)) {
-                write_f1(1, ".byte %d\n", &c);
-            }
-            write_str(1, ".byte 0\n");
+    for (struct string *str = strings; str; str = str->next) {
+        if (!str->label)
+            continue;
+        const char *chars = str->chars;
+        write_f1(1, ".L.str.%d:\n", &str->label);
+        for (int c; (c = *chars++);) {
+            write_f1(1, ".byte %d\n", &c);
         }
-        str = str->next;
+        write_str(1, ".byte 0\n");
     }
 }
 
@@ -2142,10 +2140,7 @@ int main(int argc, char **argv) {
         p_decl(Decl_Global, 0);
     }
 
-    struct sym *syms = curr_scope->head;
-    while (syms) {
-        struct sym *sym = syms;
-        syms = syms->next;
+    for (struct sym *sym = curr_scope->head; sym; sym = sym->next) {
         if (sym->kind == Sym_Func) {
             if (sym->storage_class != Static && !sym->is_defined)
                 continue;  // declaration, external linkage
