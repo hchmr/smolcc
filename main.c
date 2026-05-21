@@ -1,3 +1,5 @@
+#include <stdarg.h>
+
 //============================================================================
 //= unistd
 
@@ -46,16 +48,16 @@ static void write_int(int fd, int n) {
     write_char(fd, n % 10 + '0');
 }
 
-static void write_f_(int fd, const char *fmt, const char **args) {
+static void vwritef(int fd, const char *fmt, va_list *args) {
     for (; *fmt; fmt++) {
         if (*fmt == '%') {
             fmt++;
             if (*fmt == 'd') {
-                write_int(fd, **(int **)(args++));
+                write_int(fd, va_arg(*args, int));
             } else if (*fmt == 'c') {
-                write_char(fd, **(char **)(args++));
+                write_char(fd, va_arg(*args, int));
             } else if (*fmt == 's') {
-                const char *s = *(char **)(args++);
+                const char *s = va_arg(*args, const char *);
                 write_str(fd, s ? s : "(null)");
             } else {
                 write_char(fd, '%');
@@ -66,27 +68,11 @@ static void write_f_(int fd, const char *fmt, const char **args) {
     }
 }
 
-static void write_f4(int fd, const char *fmt, const void *x1, const void *x2, const void *x3, const void *x4) {
-    const char *args[4];
-    args[0] = x1, args[1] = x2, args[2] = x3, args[3] = x4;
-    write_f_(fd, fmt, args);
-}
-
-static void write_f3(int fd, const char *fmt, const void *x1, const void *x2, const void *x3) {
-    write_f4(fd, fmt, x1, x2, x3, 0);
-}
-
-static void write_f2(int fd, const char *fmt, const void *x1, const void *x2) {
-    write_f4(fd, fmt, x1, x2, 0, 0);
-}
-
-static void write_f1(int fd, const char *fmt, const void *x1) {
-    write_f4(fd, fmt, x1, 0, 0, 0);
-}
-
-static void write_ln(int fd, const char *s) {
-    write_str(fd, s);
-    write_char(fd, '\n');
+static void writef(int fd, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vwritef(fd, fmt, &args);
+    va_end(args);
 }
 
 //=============================================================================
@@ -116,7 +102,7 @@ static const char *find_chr(const char *s, int c) {
 //= assertions
 
 static void die(const char *label, const char *msg) {
-    write_f2(2, "%s: %s\n", label, msg);
+    writef(2, "%s: %s\n", label, msg);
     abort();
 }
 
@@ -126,7 +112,7 @@ static void assert(const char *label, int condition) {
 }
 
 static void unreachable_case(const char *label, int value) {
-    write_f2(2, "%s: case not handled: %d\n", label, &value);
+    writef(2, "%s: case not handled: %d\n", label, value);
     abort();
 }
 
@@ -178,13 +164,12 @@ struct pos {
     int line, col;
 };
 
-static void diag_at(struct pos *pos, const char *kind) {
-    write_f4(2, "%s:%d:%d: %s: ", pos->file, &pos->line, &pos->col, kind);
-}
-
-static void error_at(struct pos *pos, const char *msg) {
-    diag_at(pos, "error");
-    write_ln(2, msg);
+static void error_at(struct pos *pos, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    writef(2, "%s:%d:%d: error: ", pos->file, pos->line, pos->col);
+    vwritef(2, fmt, &args);
+    va_end(args);
     _exit(1);
 }
 
@@ -467,10 +452,8 @@ static struct sym *lookup(int ns, const char *name) {
 }
 
 static void decl_conflict(struct pos *pos, struct sym *sym, const char *msg) {
-    diag_at(pos, "error");
-    write_f2(2, "'%s' %s.", sym->name, msg);
-    write_f3(2, " Previous declaration at %s:%d:%d\n", sym->last_pos.file, &sym->last_pos.line, &sym->last_pos.col);
-    _exit(1);
+    struct pos other = sym->last_pos;
+    error_at(pos, "'%s' %s. Previous declaration at %s:%d:%d", sym->name, msg, other.file, other.line, other.col);
 }
 
 static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, int storage_class, const char *name,
@@ -1124,16 +1107,12 @@ static int eat(const char *t) {
 
 static void expect(const char *t) {
     if (!eat(t)) {
-        diag_at(&tok_pos, "error");
-        write_f2(2, "expected '%s', got '%s'\n", t, tok_str);
-        _exit(1);
+        error_at(&tok_pos, "expected '%s'", t);
     }
 }
 
 static void unexpected_expected(const char *d) {
-    diag_at(&tok_pos, "error");
-    write_f2(2, "expected %s, got '%s'\n", d, tok_str);
-    _exit(1);
+    error_at(&tok_pos, "expected %s, got '%s'", d, tok_str);
 }
 
 static const char *p_ident() {
@@ -1737,11 +1716,11 @@ static const char *get_ldr_op(struct type *type) {
 
 static void emit_scalar_data(int size, int val) {
     if (size == 1) {
-        write_f1(1, ".byte %d\n", &val);
+        writef(1, ".byte %d\n", val);
     } else if (size == 4) {
-        write_f1(1, ".long %d\n", &val);
+        writef(1, ".long %d\n", val);
     } else if (size == 8) {
-        write_f1(1, ".quad %d\n", &val);
+        writef(1, ".quad %d\n", val);
     } else
         unreachable_case("emit_data_scalar", size);
 }
@@ -1751,8 +1730,8 @@ static void emit_str_load(struct string *str) {
         next_str_id++;
         str->label = next_str_id;
     }
-    write_f1(1, "adrp x0, .L.str.%d\n", &str->label);
-    write_f1(1, "add x0, x0, :lo12:.L.str.%d\n", &str->label);
+    writef(1, "adrp x0, .L.str.%d\n", str->label);
+    writef(1, "add x0, x0, :lo12:.L.str.%d\n", str->label);
 }
 
 static void emit_int_load(int val, int reg) {
@@ -1763,10 +1742,10 @@ static void emit_int_load(int val, int reg) {
         if (i == 0) {
             const char *mov_op = val < 0 ? "movn" : "movz";
             chunk = val < 0 ? (chunk ^ chunk_mask) & chunk_mask : chunk;
-            write_f4(1, "%s x%d, #%d // %d\n", mov_op, &reg, &chunk, &val);
+            writef(1, "%s x%d, #%d // %d\n", mov_op, reg, chunk, val);
         } else if (chunk != default_chunk_value) {
             int shift = i * 16;
-            write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
+            writef(1, "movk x%d, #%d, lsl #%d\n", reg, chunk, shift);
         }
     }
 }
@@ -1776,10 +1755,10 @@ static void emit_obj(struct sym *sym) {
     if (is_scalar(sym->type)) {
         write_str(1, ".section .data\n");
         if (sym->storage_class == Extern) {
-            write_f1(1, ".globl %s\n", sym->name);
+            writef(1, ".globl %s\n", sym->name);
         }
-        write_f1(1, ".balign %d\n", &align);
-        write_f1(1, "%s:\n", sym->name);
+        writef(1, ".balign %d\n", align);
+        writef(1, "%s:\n", sym->name);
         if (sym->is_defined) {
             emit_scalar_data(size, sym->val);
         } else {
@@ -1787,54 +1766,54 @@ static void emit_obj(struct sym *sym) {
         }
     } else {
         if (sym->storage_class == Extern) {
-            write_f1(1, ".globl %s\n", sym->name);
+            writef(1, ".globl %s\n", sym->name);
         }
         write_str(1, ".section .bss\n");
-        write_f1(1, ".balign %d\n", &align);
-        write_f1(1, "%s:\n", sym->name);
-        write_f1(1, ".space %d\n", &size);
+        writef(1, ".balign %d\n", align);
+        writef(1, "%s:\n", sym->name);
+        writef(1, ".space %d\n", size);
     }
 }
 
 static void emit_frame_offset(int offset, int reg) {
     emit_int_load(-offset, reg);
-    write_f2(1, "sub x%d, x29, x%d\n", &reg, &reg);
+    writef(1, "sub x%d, x29, x%d\n", reg, reg);
 }
 
 static void emit_slot_write(struct sym *local, int reg) {
     const char *op = get_str_op(local->type);
     emit_int_load(local->offset, 9);
-    write_f2(1, "%s%d, [x29, x9]\n", op, &reg);
+    writef(1, "%s%d, [x29, x9]\n", op, reg);
 }
 
 static void emit_slot_addr(struct sym *local, int reg) {
     emit_int_load(-local->offset, 9);
-    write_f1(1, "sub x%d, x29, x9\n", &reg);
+    writef(1, "sub x%d, x29, x9\n", reg);
 }
 
 static void emit_push(int reg) {
-    write_f1(1, "str x%d, [sp, #-16]!\n", &reg);
+    writef(1, "str x%d, [sp, #-16]!\n", reg);
 }
 
 static void emit_pop(int reg) {
-    write_f1(1, "ldr x%d, [sp], #16\n", &reg);
+    writef(1, "ldr x%d, [sp], #16\n", reg);
 }
 
 static void emit_load(struct type *type, int dst, int src) {
     const char *op = get_ldr_op(type);
-    write_f3(1, "%s%d, [x%d]\n", op, &dst, &src);
+    writef(1, "%s%d, [x%d]\n", op, dst, src);
 }
 
 static void emit_store(struct type *type, int src, int dst) {
     const char *op = get_str_op(type);
-    write_f3(1, "%s%d, [x%d]\n", op, &src, &dst);
+    writef(1, "%s%d, [x%d]\n", op, src, dst);
 }
 
 static void emit_sext(struct type *type, int reg) {
     if (type->kind == Type_Char) {
-        write_f2(1, "sxtb x%d, w%d\n", &reg, &reg);
+        writef(1, "sxtb x%d, w%d\n", reg, reg);
     } else if (type->kind == Type_Int) {
-        write_f2(1, "sxtw x%d, w%d\n", &reg, &reg);
+        writef(1, "sxtw x%d, w%d\n", reg, reg);
     }
 }
 
@@ -1852,27 +1831,27 @@ static void emit_binary_operands(struct expr *expr) {
 static void emit_short_circuit_expr(struct expr *expr, const char *cond) {
     int cond_id = next_cond_id++;
     emit_scalar_expr(expr->subs[0]);
-    write_f2(1, "cb%s x0, .L.cond.%d.short\n", cond, &cond_id);
+    writef(1, "cb%s x0, .L.cond.%d.short\n", cond, cond_id);
     emit_scalar_expr(expr->subs[1]);
-    write_f1(1, ".L.cond.%d.short:\n", &cond_id);
+    writef(1, ".L.cond.%d.short:\n", cond_id);
     write_str(1, "cmp x0, #0\n");
     write_str(1, "cset x0, ne\n");
-    write_f1(1, ".L.cond.%d.end:\n", &cond_id);
+    writef(1, ".L.cond.%d.end:\n", cond_id);
 }
 
 static void emit_cmp_expr(struct expr *expr, const char *cond, const char *ucond) {
     emit_binary_operands(expr);
     write_str(1, "cmp x0, x1\n");
     if (is_ptr_type(expr->subs[0]->type)) {
-        write_f1(1, "cset x0, %s\n", ucond);
+        writef(1, "cset x0, %s\n", ucond);
     } else {
-        write_f1(1, "cset x0, %s\n", cond);
+        writef(1, "cset x0, %s\n", cond);
     }
 }
 
 static void emit_arithmetic_expr(struct expr *expr, const char *op) {
     emit_binary_operands(expr);
-    write_f1(1, "%s x0, x0, x1\n", op);
+    writef(1, "%s x0, x0, x1\n", op);
 }
 
 static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
@@ -1916,7 +1895,7 @@ static void emit_effect_expr(struct expr *expr) {
         write_str(1, "str x1, [x0, #8]  // gr_top\n");
         write_str(1, "str xzr, [x0, #16]  // vr_top\n");
         int gr_offs = -curr_func->va_area_size;
-        write_f1(1, "mov x1, #%d\n", &gr_offs);
+        writef(1, "mov x1, #%d\n", gr_offs);
         write_str(1, "str w1, [x0, #24]  // gr_offs\n");
         write_str(1, "str wzr, [x0, #28]  // vr_offs\n");
     } else if (expr->kind == Expr_VaEnd) {
@@ -1936,11 +1915,11 @@ static void emit_place_expr(struct expr *expr) {
         struct sym *sym = expr->sym;
         if (sym->kind == Sym_Global || sym->kind == Sym_Func) {
             if (sym->storage_class == Extern && !sym->is_defined) {
-                write_f1(1, "adrp x0, :got:%s\n", sym->name);
-                write_f1(1, "ldr x0, [x0, :got_lo12:%s]\n", sym->name);
+                writef(1, "adrp x0, :got:%s\n", sym->name);
+                writef(1, "ldr x0, [x0, :got_lo12:%s]\n", sym->name);
             } else {
-                write_f1(1, "adrp x0, %s\n", sym->name);
-                write_f1(1, "add x0, x0, :lo12:%s\n", sym->name);
+                writef(1, "adrp x0, %s\n", sym->name);
+                writef(1, "add x0, x0, :lo12:%s\n", sym->name);
             }
         } else if (sym->kind == Sym_Local) {
             emit_slot_addr(sym, 0);
@@ -1976,7 +1955,7 @@ static void emit_scalar_expr(struct expr *expr) {
         write_str(1, "mov x2, x0\n");
         emit_load(expr->type, 0, 0);
         emit_int_load(step, 1);
-        write_f1(1, "%s x1, x0, x1\n", op);
+        writef(1, "%s x1, x0, x1\n", op);
         emit_store(expr->type, 1, 2);
     } else if (k == Expr_Deref) {
         emit_scalar_expr(expr->subs[0]);
@@ -2043,7 +2022,7 @@ static void emit_scalar_expr(struct expr *expr) {
             emit_int_load(size, 2);
             write_str(1, "mul x1, x1, x2\n");
         }
-        write_f1(1, "%s x0, x0, x1\n", op);
+        writef(1, "%s x0, x0, x1\n", op);
     } else if (k == Expr_PtrDiff) {
         emit_binary_operands(expr);
         int size = type_size(expr->subs[0]->type->ptr_to);
@@ -2055,12 +2034,12 @@ static void emit_scalar_expr(struct expr *expr) {
     } else if (k == Expr_Cond) {
         int cond_id = next_cond_id++;
         emit_scalar_expr(expr->subs[0]);
-        write_f1(1, "cbz x0, .L.cond.%d.else\n", &cond_id);
+        writef(1, "cbz x0, .L.cond.%d.else\n", cond_id);
         emit_scalar_expr(expr->subs[1]);
-        write_f1(1, "b .L.cond.%d.end\n", &cond_id);
-        write_f1(1, ".L.cond.%d.else:\n", &cond_id);
+        writef(1, "b .L.cond.%d.end\n", cond_id);
+        writef(1, ".L.cond.%d.else:\n", cond_id);
         emit_scalar_expr(expr->subs[2]);
-        write_f1(1, ".L.cond.%d.end:\n", &cond_id);
+        writef(1, ".L.cond.%d.end:\n", cond_id);
     } else if (k == Expr_Assign) {
         emit_place_expr(expr->subs[0]);
         emit_assign_to_addr(expr->type, expr->subs[1]);
@@ -2079,7 +2058,7 @@ static void emit_scalar_expr(struct expr *expr) {
         for (int i = argc; i-- > 0;) {
             emit_pop(i);
         }
-        write_f1(1, "bl %s\n", func_sym->name);
+        writef(1, "bl %s\n", func_sym->name);
         // if calling a foreign function, we can't be sure
         // if it will sign-extend or zero the return value.
         if (is_scalar(expr->type) && type_size(expr->type) < 8) {
@@ -2107,7 +2086,7 @@ static void emit_init_decls(struct stmt *stmt) {
 }
 
 static void emit_stmt(struct stmt *stmt) {
-    write_f3(1, "// %s:%d:%d\n", stmt->pos.file, &stmt->pos.line, &stmt->pos.col);  // debug info
+    writef(1, "// %s:%d:%d\n", stmt->pos.file, stmt->pos.line, stmt->pos.col);  // debug info
     int k = stmt->kind;
     if (k == Stmt_Block) {
         for (struct stmt *sub = stmt->sub; sub; sub = sub->next) {
@@ -2117,38 +2096,38 @@ static void emit_stmt(struct stmt *stmt) {
         if (stmt->expr) {
             emit_scalar_expr(stmt->expr);
         }
-        write_f1(1, "b .L.return.%s\n", curr_func->name);
+        writef(1, "b .L.return.%s\n", curr_func->name);
     } else if (k == Stmt_If) {
         int cond_id = next_cond_id++;
         emit_scalar_expr(stmt->expr);
-        write_f1(1, "cbz x0, .L.if.%d.else\n", &cond_id);
+        writef(1, "cbz x0, .L.if.%d.else\n", cond_id);
         emit_stmt(stmt->sub);
-        write_f1(1, "b .L.if.%d.end\n", &cond_id);
-        write_f1(1, ".L.if.%d.else:\n", &cond_id);
+        writef(1, "b .L.if.%d.end\n", cond_id);
+        writef(1, ".L.if.%d.else:\n", cond_id);
         if (stmt->sub->next) {
             emit_stmt(stmt->sub->next);
         }
-        write_f1(1, ".L.if.%d.end:\n", &cond_id);
+        writef(1, ".L.if.%d.end:\n", cond_id);
     } else if (k == Stmt_Loop) {
         stmt->loop_id = next_loop_id++;
         emit_stmt(stmt->sub);
-        write_f1(1, "b .L.loop.%d.cond\n", &stmt->loop_id);
-        write_f1(1, ".L.loop.%d.body:\n", &stmt->loop_id);
+        writef(1, "b .L.loop.%d.cond\n", stmt->loop_id);
+        writef(1, ".L.loop.%d.body:\n", stmt->loop_id);
         emit_stmt(stmt->sub->next->next);
-        write_f1(1, ".L.loop.%d.step:\n", &stmt->loop_id);
+        writef(1, ".L.loop.%d.step:\n", stmt->loop_id);
         emit_stmt(stmt->sub->next);
-        write_f1(1, ".L.loop.%d.cond:\n", &stmt->loop_id);
+        writef(1, ".L.loop.%d.cond:\n", stmt->loop_id);
         if (stmt->expr) {
             emit_scalar_expr(stmt->expr);
-            write_f1(1, "cbnz x0, .L.loop.%d.body\n", &stmt->loop_id);
+            writef(1, "cbnz x0, .L.loop.%d.body\n", stmt->loop_id);
         } else {
-            write_f1(1, "b .L.loop.%d.body\n", &stmt->loop_id);
+            writef(1, "b .L.loop.%d.body\n", stmt->loop_id);
         }
-        write_f1(1, ".L.loop.%d.end:\n", &stmt->loop_id);
+        writef(1, ".L.loop.%d.end:\n", stmt->loop_id);
     } else if (k == Stmt_Break) {
-        write_f1(1, "b .L.loop.%d.end\n", &stmt->sub->loop_id);
+        writef(1, "b .L.loop.%d.end\n", stmt->sub->loop_id);
     } else if (k == Stmt_Continue) {
-        write_f1(1, "b .L.loop.%d.step\n", &stmt->sub->loop_id);
+        writef(1, "b .L.loop.%d.step\n", stmt->sub->loop_id);
     } else if (k == Stmt_Decl) {
         emit_init_decls(stmt);
     } else if (k == Stmt_Expr) {
@@ -2167,13 +2146,13 @@ static void emit_func(struct sym *func) {
 
     write_str(1, ".text\n");
     if (func->storage_class != Static) {
-        write_f1(1, ".globl %s\n", func->name);
+        writef(1, ".globl %s\n", func->name);
     }
-    write_f1(1, "%s:\n", func->name);
+    writef(1, "%s:\n", func->name);
     // prologue
     write_str(1, "stp x29, x30, [sp, #-16]!\n");
     write_str(1, "mov x29, sp\n");
-    write_f1(1, "sub sp, sp, #%d\n", &curr_func->size);
+    writef(1, "sub sp, sp, #%d\n", curr_func->size);
     struct sym *sym = func->scope->head;
     for (int i = 0; i < func->type->n_params; i++, sym = sym->next) {
         emit_slot_write(sym, i);
@@ -2181,12 +2160,12 @@ static void emit_func(struct sym *func) {
     for (int i = func->type->n_params; i < 8 && func->type->is_va; i++) {
         int offset = func->va_area_offset + (i - func->type->n_params) * 8;
         emit_int_load(offset, 9);
-        write_f1(1, "str x%d, [x29, x9]\n", &i);
+        writef(1, "str x%d, [x29, x9]\n", i);
     }
     // body
     emit_stmt(func->body);
     // epilogue
-    write_f1(1, ".L.return.%s:\n", func->name);
+    writef(1, ".L.return.%s:\n", func->name);
     write_str(1, "mov sp, x29\n");
     write_str(1, "ldp x29, x30, [sp], #16\n");
     write_str(1, "ret\n");
@@ -2230,9 +2209,9 @@ static void emit_str_literals() {
         if (!str->label)
             continue;
         const char *chars = str->chars;
-        write_f1(1, ".L.str.%d:\n", &str->label);
+        writef(1, ".L.str.%d:\n", str->label);
         for (int c; (c = *chars++);) {
-            write_f1(1, ".byte %d\n", &c);
+            writef(1, ".byte %d\n", c);
         }
         write_str(1, ".byte 0\n");
     }
@@ -2248,7 +2227,7 @@ int main(int argc, char **argv) {
     }
     const char *file_name = argv[1];
     if ((inp = open(file_name, 0, 0)) < 0) {
-        write_f1(2, "error: cannot open file '%s'\n", file_name);
+        writef(2, "error: cannot open file '%s'\n", file_name);
         return 1;
     }
 
