@@ -14,17 +14,6 @@ extern void abort();
 
 enum { EOF = -1 };
 
-static void write_str(int fd, const char *s) {
-    const char *p = s;
-    while (*p++)
-        ;
-    write(fd, s, p - s - 1);
-}
-
-static void write_char(int fd, int c) {
-    write(fd, &c, 1);
-}
-
 static char rdbuf[2];
 static int rdbuf_len, rdbuf_pos;
 
@@ -35,6 +24,17 @@ static int peek_char(int fd) {
     if (rdbuf_len <= 0)
         return EOF;
     return rdbuf[rdbuf_pos];
+}
+
+static void write_str(int fd, const char *s) {
+    const char *p = s;
+    while (*p++)
+        ;
+    write(fd, s, p - s - 1);
+}
+
+static void write_char(int fd, int c) {
+    write(fd, &c, 1);
 }
 
 static void write_int(int fd, int n) {
@@ -291,10 +291,9 @@ static int type_eq(struct type *a, struct type *b) {
     } else if (a->kind == Type_Func) {
         if (a->ret_type != b->ret_type || a->n_params != b->n_params || a->is_va != b->is_va)
             return 0;
-        for (int i = 0; i < a->n_params; i++) {
+        for (int i = 0; i < a->n_params; i++)
             if (a->param_types[i] != b->param_types[i])
                 return 0;
-        }
         return 1;
     } else if (a->kind == Type_Struct) {
         return a->sym == b->sym;
@@ -424,30 +423,26 @@ static struct sym *add_sym(struct pos *pos, struct scope *scope, int kind, const
     sym->name = name;
     sym->last_pos = *pos;
     if (scope->head) {
-        scope->tail->next = sym, scope->tail = sym;
+        return scope->tail->next = sym, scope->tail = sym;
     } else {
-        scope->head = scope->tail = sym;
+        return scope->head = scope->tail = sym;
     }
-    return sym;
 }
 
 static struct sym *lookup_in(struct scope *scope, int is_struct, const char *name) {
     if (!name)
         return 0;
-    for (struct sym *sym = scope->head; sym; sym = sym->next) {
-        int sym_is_struct = sym->kind == Sym_Struct;
-        if (sym_is_struct == is_struct && sym->name == name)
+    for (struct sym *sym = scope->head; sym; sym = sym->next)
+        if ((sym->kind == Sym_Struct) == is_struct && sym->name == name)
             return sym;
-    }
     return 0;
 }
 
 static struct sym *lookup(int ns, const char *name) {
-    for (struct scope *s = curr_scope; s; s = s->parent) {
-        struct sym *sym = lookup_in(s, ns, name);
-        if (sym)
+    struct sym *sym;
+    for (struct scope *s = curr_scope; s; s = s->parent)
+        if ((sym = lookup_in(s, ns, name)))
             return sym;
-    }
     return 0;
 }
 
@@ -944,13 +939,11 @@ static struct expr *elab_expr(struct expr *e) {
 }
 
 static struct expr *elab_rvalue_expr(struct expr *expr) {
-    expr = elab_expr(expr);
-    return ptr_decay(expr);
+    return ptr_decay(elab_expr(expr));
 }
 
 static struct expr *elab_expr_expect(struct expr *expr, struct type *expected) {
-    expr = elab_rvalue_expr(expr);
-    return apply_assignment_conversion(expr, expected);
+    return apply_assignment_conversion(elab_rvalue_expr(expr), expected);
 }
 
 static struct expr *elab_cond_expr(struct expr *expr) {
@@ -982,9 +975,7 @@ enum {
     Tok_Sym,
 };
 
-enum {
-    MAX_TOK_LEN = 255,
-};
+enum { MAX_TOK_LEN = 255 };
 
 static int inp;
 
@@ -1009,10 +1000,9 @@ static void next_chr() {
     if (tok_len < MAX_TOK_LEN) {
         tok_str[tok_len++] = chr;
     }
-    chr = peek_char(inp);
-    if (chr != EOF) {
-        rdbuf_pos++;
-    }
+    if (chr = peek_char(inp), chr == EOF)
+        return;
+    rdbuf_pos++;
 }
 
 static void lex() {
@@ -1037,8 +1027,7 @@ static void lex() {
             }
             tok = Tok_Wrd;
         } else if (chr == '\'' || chr == '"') {
-            int delim = chr;
-            int len = 0;
+            int delim = chr, len = 0;
             next_chr();
             while (1) {
                 if (chr == delim)
@@ -1106,9 +1095,8 @@ static int eat(const char *t) {
 }
 
 static void expect(const char *t) {
-    if (!eat(t)) {
+    if (!eat(t))
         error_at(&tok_pos, "expected '%s'", t);
-    }
 }
 
 static void unexpected_expected(const char *d) {
@@ -1186,8 +1174,7 @@ static int p_const_expr();
 
 static struct expr *p_unary_expr(struct pos *pos, int kind) {
     struct expr *res = p_expr(Prec_Unary);
-    res = new_unary_expr(pos, kind, res);
-    return res;
+    return new_unary_expr(pos, kind, res);
 }
 
 static struct expr *p_bin_expr(struct expr *lhs, int kind, int rbp) {
@@ -1353,16 +1340,13 @@ static struct expr *p_expr(int rbp) {
         } else if (rbp < Prec_Postfix && eat("--")) {
             acc = new_unary_expr(&pos, Expr_PostDec, acc);
         } else {
-            break;
+            return acc;
         }
     }
-
-    return acc;
 }
 
 static int p_const_expr() {
-    struct expr *expr = p_expr(Prec_Cond - 1);
-    return eval(elab_rvalue_expr(expr));
+    return eval(elab_rvalue_expr(p_expr(Prec_Cond - 1)));
 }
 
 static struct stmt *p_stmt() {
@@ -1477,8 +1461,7 @@ static struct stmt *p_stmt() {
         return stmt ? stmt : new_stmt(&pos, Stmt_Empty);
     } else {
         struct stmt *stmt = new_stmt(&pos, Stmt_Expr);
-        stmt->expr = p_expr(0);
-        stmt->expr = elab_rvalue_expr(stmt->expr);
+        stmt->expr = elab_rvalue_expr(p_expr(0));
         expect(";");
         return stmt;
     }
@@ -1699,7 +1682,6 @@ static const char *get_str_op(struct type *type) {
         return "str x";
     else
         unreachable_case("get_str_op", type->kind);
-    return 0;
 }
 
 static const char *get_ldr_op(struct type *type) {
@@ -1711,7 +1693,6 @@ static const char *get_ldr_op(struct type *type) {
         return "ldr x";
     else
         unreachable_case("get_ldr_op", type->kind);
-    return 0;
 }
 
 static void emit_scalar_data(int size, int val) {
@@ -1721,8 +1702,9 @@ static void emit_scalar_data(int size, int val) {
         writef(1, ".long %d\n", val);
     } else if (size == 8) {
         writef(1, ".quad %d\n", val);
-    } else
+    } else {
         unreachable_case("emit_data_scalar", size);
+    }
 }
 
 static void emit_str_load(struct string *str) {
@@ -2172,10 +2154,10 @@ static void emit_func(struct sym *func) {
     curr_func = 0;
 }
 
-static void emit_memcpy_helper() {
+static void emit_runtime_helpers() {
     write_str(1, ".section .text\n");
     write_str(1, ".globl _memcpy\n");
-    write_str(1, "_memcpy:\n");
+    write_str(1, "_memcpy:\n"); // void *_memcpy(void *d, const void *s, int n)
     write_str(1, "mov x3, x0\n");
     write_str(1, "cbz x2, .L.memcpy.end\n");
     write_str(1, ".L.memcpy.body:\n");
@@ -2185,11 +2167,9 @@ static void emit_memcpy_helper() {
     write_str(1, "cbnz x2, .L.memcpy.body\n");
     write_str(1, ".L.memcpy.end:\n");
     write_str(1, "ret\n");  // x0 still holds dest
-}
 
-static void emit_va_arg_helper() {
     write_str(1, ".section .text\n");
-    write_str(1, "_va_arg:\n");  // void *_va_arg(va_list *ap)
+    write_str(1, "_va_arg:\n"); // void *_va_arg(va_list *ap)
     write_str(1, "ldrsw x1, [x0, #24]  // gr_offs\n");
     write_str(1, "cmp w1, #0\n");
     write_str(1, "b.ge .L.va_arg.err\n");
@@ -2226,7 +2206,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     const char *file_name = argv[1];
-    if ((inp = open(file_name, 0, 0)) < 0) {
+    if (inp = open(file_name, 0, 0), inp < 0) {
         writef(2, "error: cannot open file '%s'\n", file_name);
         return 1;
     }
@@ -2262,8 +2242,7 @@ int main(int argc, char **argv) {
             emit_obj(sym);
         }
     }
-    emit_memcpy_helper();
-    emit_va_arg_helper();
+    emit_runtime_helpers();
     emit_str_literals();
 
     return 0;
