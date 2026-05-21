@@ -23,12 +23,16 @@ static void write_char(int fd, int c) {
     write(fd, &c, 1);
 }
 
-static int read_char(int fd) {
-    char c;
-    int n = read(fd, &c, 1);
-    if (n <= 0)
+static char rdbuf[2];
+static int rdbuf_len, rdbuf_pos;
+
+static int peek_char(int fd) {
+    if (rdbuf_pos < rdbuf_len)
+        return rdbuf[rdbuf_pos];
+    rdbuf_pos = 0, rdbuf_len = read(fd, rdbuf, 2);
+    if (rdbuf_len <= 0)
         return EOF;
-    return c;
+    return rdbuf[rdbuf_pos];
 }
 
 static void write_int(int fd, int n) {
@@ -215,6 +219,8 @@ struct sym {
     int val;
     // for Sym_Func
     struct stmt *body;
+    struct sym *last_param;
+    int va_area_offset, va_area_size;
     // for Sym_Struct and Sym_Func
     struct scope *scope;
     int size, align;
@@ -235,6 +241,7 @@ enum {
     Type_Array,
     Type_Func,
     Type_Struct,
+    Type_VaList,
 };
 
 struct type {
@@ -246,14 +253,14 @@ struct type {
     // for Type_Func
     struct type *ret_type;
     struct type *param_types[MAX_FUNC_PARAMS];
-    int n_params;
+    int n_params, is_va;
     // for Type_Struct
     struct sym *sym;
     // for type interning
     struct type *next;
 };
 
-static struct type *types, *void_type, *char_type, *int_type;
+static struct type *types, *void_type, *char_type, *int_type, *va_list_type;
 
 static int type_size(struct type *ty) {
     if (ty->kind == Type_Char) {
@@ -266,6 +273,8 @@ static int type_size(struct type *ty) {
         return type_size(ty->ptr_to) * ty->array_len;
     } else if (ty->kind == Type_Struct) {
         return ty->sym->is_defined ? ty->sym->size : 0;
+    } else if (ty->kind == Type_VaList) {
+        return 32;
     } else {
         return 0;
     }
@@ -276,6 +285,8 @@ static int type_align(struct type *ty) {
         return type_align(ty->ptr_to);
     } else if (ty->kind == Type_Struct) {
         return ty->sym->is_defined ? ty->sym->align : 0;
+    } else if (ty->kind == Type_VaList) {
+        return 8;
     } else {
         return type_size(ty);
     }
@@ -293,7 +304,7 @@ static int type_eq(struct type *a, struct type *b) {
     } else if (a->kind == Type_Array) {
         return a->array_len == b->array_len && a->ptr_to == b->ptr_to;
     } else if (a->kind == Type_Func) {
-        if (a->ret_type != b->ret_type || a->n_params != b->n_params)
+        if (a->ret_type != b->ret_type || a->n_params != b->n_params || a->is_va != b->is_va)
             return 0;
         for (int i = 0; i < a->n_params; i++) {
             if (a->param_types[i] != b->param_types[i])
@@ -364,7 +375,7 @@ static struct type *new_struct_type(struct sym *sym) {
     return intern_type(&ty);
 }
 
-static struct type *new_func_type(struct type *ret_type, struct type **param_types, int n_params) {
+static struct type *new_func_type(struct type *ret_type, struct type **param_types, int n_params, int is_va) {
     struct type ty;
     ty.kind = Type_Func;
     ty.ret_type = ret_type;
@@ -372,6 +383,7 @@ static struct type *new_func_type(struct type *ret_type, struct type **param_typ
         ty.param_types[i] = param_types[i];
     }
     ty.n_params = n_params;
+    ty.is_va = is_va;
     return intern_type(&ty);
 }
 
@@ -399,6 +411,8 @@ static void init_types() {
     char_type = intern_type(&tmp);
     tmp.kind = Type_Int;
     int_type = intern_type(&tmp);
+    tmp.kind = Type_VaList;
+    va_list_type = intern_type(&tmp);
 }
 
 //=============================================================================
@@ -546,6 +560,9 @@ enum {
     Expr_Num,
     Expr_Chr,
     Expr_Str,
+    Expr_VaStart,
+    Expr_VaEnd,
+    Expr_VaArg,
 };
 
 struct expr {
@@ -804,12 +821,17 @@ static struct expr *elab_expr(struct expr *e) {
         struct type *func = callee->subs[0]->sym->type;
         struct expr **args = &e->subs[1];
         int n_args = e->n_subs - 1;
-        if (n_args > func->n_params)
+        if (n_args > func->n_params && !func->is_va)
             error_at(&e->pos, "too many arguments in function call");
         if (n_args < func->n_params)
             error_at(&e->pos, "too few arguments in function call");
         for (int i = 0; i < n_args; i++) {
-            args[i] = apply_assignment_conversion(args[i], func->param_types[i]);
+            if (i < func->n_params) {
+                args[i] = apply_assignment_conversion(args[i], func->param_types[i]);
+            } else {
+                if (!is_scalar(args[i]->type))
+                    error_at(&args[i]->pos, "variadic arguments must have scalar types");
+            }
         }
         e->type = func->ret_type;
     } else if (k == Expr_Member) {
@@ -915,6 +937,23 @@ static struct expr *elab_expr(struct expr *e) {
         e->type = e->subs[0]->type;
     } else if (k == Expr_Comma) {
         e->type = e->subs[1]->type;
+    } else if (k == Expr_VaStart) {
+        if (curr_func->type->kind != Type_Func || !curr_func->type->is_va)
+            error_at(&e->pos, "va_start used outside of a variadic function");
+        if (e->subs[0]->type != va_list_type)
+            error_at(&e->pos, "va_start operand must be of type va_list");
+        if (e->subs[1]->kind != Expr_Ident || e->subs[1]->sym != curr_func->last_param)
+            error_at(&e->pos, "second operand of va_start must be a parameter name");
+        e->type = void_type;
+    } else if (k == Expr_VaEnd) {
+        if (e->subs[0]->type != va_list_type)
+            error_at(&e->pos, "va_end operand must be of type va_list");
+        e->type = void_type;
+    } else if (k == Expr_VaArg) {
+        if (e->subs[0]->type != va_list_type)
+            error_at(&e->pos, "va_arg first operand must be of type va_list");
+        if (!is_scalar(e->type))
+            error_at(&e->pos, "va_arg second operand must have scalar type");
     } else {
         unreachable_case("elab_expr", k);
     }
@@ -987,7 +1026,10 @@ static void next_chr() {
     if (tok_len < MAX_TOK_LEN) {
         tok_str[tok_len++] = chr;
     }
-    chr = read_char(inp);
+    chr = peek_char(inp);
+    if (chr != EOF) {
+        rdbuf_pos++;
+    }
 }
 
 static void lex() {
@@ -1056,6 +1098,8 @@ static void lex() {
                 next_chr();
             } else if (prev_chr == '-' && chr == '>') {
                 next_chr();
+            } else if (prev_chr == '.' && chr == '.' && peek_char(inp) == '.') {
+                next_chr(), next_chr();
             }
         }
         break;
@@ -1126,7 +1170,7 @@ static int at_storage_class() {
 }
 
 static int at_typename() {
-    return at("void") || at("char") || at("int") || at("struct") || at("enum") || at("const");
+    return at("void") || at("char") || at("int") || at("va_list") || at("struct") || at("enum") || at("const");
 }
 
 static int at_decl() {
@@ -1211,6 +1255,33 @@ static struct expr *p_expr(int rbp) {
         expect(")");
         acc = new_expr(&pos, Expr_Num, 0);
         acc->int_val = type_size(type);
+    } else if (eat("va_start")) {
+        expect("(");
+        struct expr *arg = p_expr(Prec_Comma);
+        expect(",");
+        struct expr *other = p_expr(Prec_Comma);
+        expect(")");
+        struct sym *last_param_sym = other->kind == Expr_Ident ? lookup(0, other->name) : 0;
+        if (!last_param_sym || last_param_sym != curr_func->last_param)
+            error_at(&other->pos, "second operand of va_start must be a parameter name");
+        acc = new_expr(&pos, Expr_VaStart, 2);
+        acc->subs[0] = arg;
+        acc->subs[1] = other;
+    } else if (eat("va_arg")) {
+        expect("(");
+        struct expr *arg = p_expr(Prec_Comma);
+        expect(",");
+        struct type *type = p_typename();
+        expect(")");
+        acc = new_expr(&pos, Expr_VaArg, 1);
+        acc->subs[0] = arg;
+        acc->type = type;
+    } else if (eat("va_end")) {
+        expect("(");
+        struct expr *arg = p_expr(Prec_Comma);
+        expect(")");
+        acc = new_expr(&pos, Expr_VaEnd, 1);
+        acc->subs[0] = arg;
     } else if (tok == Tok_Wrd) {
         acc = new_expr(&pos, Expr_Ident, 0);
         acc->name = p_ident();
@@ -1499,6 +1570,8 @@ extern void p_decl(int scope, void *ctx) {
             base_type = int_type;
         } else if (!base_type && eat("char")) {
             base_type = char_type;
+        } else if (!base_type && eat("va_list")) {
+            base_type = va_list_type;
         } else if (!base_type && eat("struct")) {
             base_type = p_struct();
         } else if (!base_type && eat("enum")) {
@@ -1533,19 +1606,25 @@ extern void p_decl(int scope, void *ctx) {
         if (eat("(")) {
             struct type *param_types[MAX_FUNC_PARAMS];
             has_params = 1;
+            int is_va = 0;
             push_scope();
-            for (n_params = 0; !eat(")"); n_params++) {
+            for (n_params = 0; !at(")"); n_params++) {
                 if (n_params >= MAX_FUNC_PARAMS)
                     error_at(&name_pos, "too many parameters in function declaration");
                 if (n_params > 0) {
                     expect(",");
+                    if (eat("...")) {
+                        is_va = 1;
+                        break;
+                    }
                 }
                 p_decl(Decl_Param, &params[n_params]);
                 param_types[n_params] = params[n_params]->type;
             }
+            expect(")");
             if (!is_scalar(type) && !is_void_type(type))
                 error_at(&name_pos, "bad function return type");
-            type = new_func_type(type, param_types, n_params);
+            type = new_func_type(type, param_types, n_params, is_va);
             pop_scope();
         } else if (at("[")) {
             while (eat("[")) {
@@ -1582,7 +1661,9 @@ extern void p_decl(int scope, void *ctx) {
             if (has_func_body) {
                 sym->scope = push_scope();
                 for (int i = 0; i < n_params; i++) {
-                    declare(&params[i]->last_pos, sym, Sym_Local, 0, params[i]->name, params[i]->type, 1);
+                    struct sym *param =
+                        declare(&params[i]->last_pos, sym, Sym_Local, 0, params[i]->name, params[i]->type, 1);
+                    sym->last_param = param;
                 }
                 curr_func = sym;
                 sym->body = p_stmt();
@@ -1682,7 +1763,7 @@ static void emit_int_load(int val, int reg) {
         if (i == 0) {
             const char *mov_op = val < 0 ? "movn" : "movz";
             chunk = val < 0 ? (chunk ^ chunk_mask) & chunk_mask : chunk;
-            write_f3(1, "%s x%d, #%d\n", mov_op, &reg, &chunk);
+            write_f4(1, "%s x%d, #%d // %d\n", mov_op, &reg, &chunk, &val);
         } else if (chunk != default_chunk_value) {
             int shift = i * 16;
             write_f3(1, "movk x%d, #%d, lsl #%d\n", &reg, &chunk, &shift);
@@ -1692,7 +1773,7 @@ static void emit_int_load(int val, int reg) {
 
 static void emit_obj(struct sym *sym) {
     int size = type_size(sym->type), align = type_align(sym->type);
-    if (size <= 8) {
+    if (is_scalar(sym->type)) {
         write_str(1, ".section .data\n");
         if (sym->storage_class == Extern) {
             write_f1(1, ".globl %s\n", sym->name);
@@ -1715,6 +1796,11 @@ static void emit_obj(struct sym *sym) {
     }
 }
 
+static void emit_frame_offset(int offset, int reg) {
+    emit_int_load(-offset, reg);
+    write_f2(1, "sub x%d, x29, x%d\n", &reg, &reg);
+}
+
 static void emit_slot_write(struct sym *local, int reg) {
     const char *op = get_str_op(local->type);
     emit_int_load(local->offset, 9);
@@ -1722,8 +1808,8 @@ static void emit_slot_write(struct sym *local, int reg) {
 }
 
 static void emit_slot_addr(struct sym *local, int reg) {
-    emit_int_load(local->offset, 9);
-    write_f1(1, "add x%d, x29, x9\n", &reg);
+    emit_int_load(-local->offset, 9);
+    write_f1(1, "sub x%d, x29, x9\n", &reg);
 }
 
 static void emit_push(int reg) {
@@ -1811,7 +1897,7 @@ static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
         write_str(1, "mov x1, x0\n");
         emit_pop(0);
         emit_int_load(type_size(dst_type), 2);
-        write_str(1, "bl memcpy\n");
+        write_str(1, "bl _memcpy\n");
     }
 }
 
@@ -1822,6 +1908,19 @@ static void emit_effect_expr(struct expr *expr) {
     } else if (expr->kind == Expr_Comma) {
         emit_effect_expr(expr->subs[0]);
         emit_effect_expr(expr->subs[1]);
+    } else if (expr->kind == Expr_VaStart) {
+        emit_place_expr(expr->subs[0]);
+        write_str(1, "add x1, x29, #16  // top of frame\n");
+        write_str(1, "str x1, [x0]  // stack\n");
+        emit_frame_offset(curr_func->va_area_offset + curr_func->va_area_size, 1);
+        write_str(1, "str x1, [x0, #8]  // gr_top\n");
+        write_str(1, "str xzr, [x0, #16]  // vr_top\n");
+        int gr_offs = -curr_func->va_area_size;
+        write_f1(1, "mov x1, #%d\n", &gr_offs);
+        write_str(1, "str w1, [x0, #24]  // gr_offs\n");
+        write_str(1, "str wzr, [x0, #28]  // vr_offs\n");
+    } else if (expr->kind == Expr_VaEnd) {
+        // no-op
     } else if (is_scalar(expr->type) || is_void_type(expr->type)) {
         emit_scalar_expr(expr);
     } else if (is_lvalue(expr)) {
@@ -1989,6 +2088,9 @@ static void emit_scalar_expr(struct expr *expr) {
     } else if (k == Expr_Comma) {
         emit_effect_expr(expr->subs[0]);
         emit_scalar_expr(expr->subs[1]);
+    } else if (k == Expr_VaArg) {
+        emit_place_expr(expr->subs[0]);
+        write_str(1, "bl _va_arg\n");
     } else {
         unreachable_case("emit_scalar_expr", k);
     }
@@ -2058,7 +2160,10 @@ static void emit_stmt(struct stmt *stmt) {
 
 static void emit_func(struct sym *func) {
     curr_func = func;
-    curr_func->size = align_up(curr_func->size, 16);
+    int n_va_args = func->type->is_va ? 8 - func->type->n_params : 0;
+    func->va_area_offset = -align_up(curr_func->size + n_va_args * 8, 8);
+    func->va_area_size = n_va_args * 8;
+    curr_func->size = align_up(-func->va_area_offset, 16);
 
     write_str(1, ".text\n");
     if (func->storage_class != Static) {
@@ -2073,6 +2178,11 @@ static void emit_func(struct sym *func) {
     for (int i = 0; i < func->type->n_params; i++, sym = sym->next) {
         emit_slot_write(sym, i);
     }
+    for (int i = func->type->n_params; i < 8 && func->type->is_va; i++) {
+        int offset = func->va_area_offset + (i - func->type->n_params) * 8;
+        emit_int_load(offset, 9);
+        write_f1(1, "str x%d, [x29, x9]\n", &i);
+    }
     // body
     emit_stmt(func->body);
     // epilogue
@@ -2083,10 +2193,10 @@ static void emit_func(struct sym *func) {
     curr_func = 0;
 }
 
-static void emit_memcpy() {
+static void emit_memcpy_helper() {
     write_str(1, ".section .text\n");
-    write_str(1, ".globl memcpy\n");
-    write_str(1, "memcpy:\n");
+    write_str(1, ".globl _memcpy\n");
+    write_str(1, "_memcpy:\n");
     write_str(1, "mov x3, x0\n");
     write_str(1, "cbz x2, .L.memcpy.end\n");
     write_str(1, ".L.memcpy.body:\n");
@@ -2096,6 +2206,22 @@ static void emit_memcpy() {
     write_str(1, "cbnz x2, .L.memcpy.body\n");
     write_str(1, ".L.memcpy.end:\n");
     write_str(1, "ret\n");  // x0 still holds dest
+}
+
+static void emit_va_arg_helper() {
+    write_str(1, ".section .text\n");
+    write_str(1, "_va_arg:\n");  // void *_va_arg(va_list *ap)
+    write_str(1, "ldrsw x1, [x0, #24]  // gr_offs\n");
+    write_str(1, "cmp w1, #0\n");
+    write_str(1, "b.ge .L.va_arg.err\n");
+    write_str(1, "ldr x2, [x0, #8]  // gr_top\n");
+    write_str(1, "ldr x3, [x2, x1]\n");
+    write_str(1, "add w1, w1, #8\n");
+    write_str(1, "str w1, [x0, #24]\n");
+    write_str(1, "mov x0, x3\n");
+    write_str(1, "ret\n");
+    write_str(1, ".L.va_arg.err:\n");
+    write_str(1, "brk #0\n");
 }
 
 static void emit_str_literals() {
@@ -2157,7 +2283,8 @@ int main(int argc, char **argv) {
             emit_obj(sym);
         }
     }
-    emit_memcpy();
+    emit_memcpy_helper();
+    emit_va_arg_helper();
     emit_str_literals();
 
     return 0;

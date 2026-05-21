@@ -1,14 +1,17 @@
 minicc
 
 A minimal self-hosting C compiler for a subset of C99, targeting
-aarch64-unknown-linux. Around 2k lines of code.
+aarch64-unknown-linux in around 2k lines of code.
 
 Basic support for the following features:
 - types: void, char, int, pointer, array, struct
 - global declarations: functions, globals, structs, enums
 - statements: declarations, if, while, for, break, continue, return
+- varargs: va_list, va_start, va_arg, va_end
 
-No preprocessor, typedefs, varargs, etc.
+No preprocessor, typedefs, compound assignments, etc. The feature set is mainly
+guided by the needs of the bootstrap, but some additional features like for
+loops and varargs were added for convenience.
 
 Implementation notes:
 - dependencies: C99 compiler + POSIX libc; builds on Linux and macOS
