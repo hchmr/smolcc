@@ -524,6 +524,7 @@ enum {
     Expr_Mod,
     Expr_Cast,
     Expr_Neg,
+    Expr_BitNot,
     Expr_Not,
     Expr_Addr,
     Expr_Deref,
@@ -834,6 +835,10 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (k == Expr_Neg) {
         if (!is_integer_type(e->subs[0]->type))
             error_at(&e->pos, "operand must be arithmetic");
+        e->type = e->subs[0]->type;
+    } else if (k == Expr_BitNot) {
+        if (!is_integer_type(e->subs[0]->type))
+            error_at(&e->pos, "operand must be integer");
         e->type = e->subs[0]->type;
     } else if (k == Expr_Not) {
         if (!is_scalar(e->subs[0]->type))
@@ -1198,6 +1203,8 @@ static struct expr *p_expr(int rbp) {
         }
     } else if (eat("-")) {
         acc = p_unary_expr(&pos, Expr_Neg);
+    } else if (eat("~")) {
+        acc = p_unary_expr(&pos, Expr_BitNot);
     } else if (eat("!")) {
         acc = p_unary_expr(&pos, Expr_Not);
     } else if (tok == Tok_Num) {
@@ -1723,7 +1730,7 @@ static void emit_int_load(int val, int reg) {
         int chunk = val & chunk_mask;
         if (i == 0) {
             const char *mov_op = val < 0 ? "movn" : "movz";
-            chunk = val < 0 ? (chunk ^ chunk_mask) & chunk_mask : chunk;
+            chunk = val < 0 ? ~chunk & chunk_mask : chunk;
             writef(1, "%s x%d, #%d // %d\n", mov_op, reg, chunk, val);
         } else if (chunk != default_chunk_value) {
             int shift = i * 16;
@@ -1944,6 +1951,9 @@ static void emit_scalar_expr(struct expr *expr) {
         emit_load(expr->type, 0, 0);
     } else if (k == Expr_Addr) {
         emit_place_expr(expr->subs[0]);
+    } else if (k == Expr_BitNot) {
+        emit_scalar_expr(expr->subs[0]);
+        write_str(1, "mvn x0, x0\n");
     } else if (k == Expr_Not) {
         emit_scalar_expr(expr->subs[0]);
         write_str(1, "cmp x0, #0\n");
