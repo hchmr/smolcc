@@ -62,14 +62,14 @@ if [[ "${MINICC_SKIP_MAKE:-0}" != "1" ]]; then
     env MAKEFLAGS="${MAKEFLAGS:+$MAKEFLAGS }--silent" make
 fi
 
-./out/minicc "$source_file" > "$asm_file"
+./out/minicc "$source_file" | ./scripts/asm-fmt > "$asm_file"
 if [[ $stop_after_asm == true ]]; then
     exit 0
 fi
 
-cc "$asm_file" -c -o "$obj_file"
+cc "$asm_file" -g -c -o "$obj_file"
 if [[ $stop_after_obj == true ]]; then
     exit 0
 fi
 
-cc "$obj_file" -o "$exe_file"
+cc "$obj_file" -g -o "$exe_file"
