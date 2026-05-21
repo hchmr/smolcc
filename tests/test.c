@@ -1,5 +1,6 @@
 //# mode: run
 //# exit: 210
+
 extern int ext_counter;
 extern int ext_counter;
 int ext_counter;
@@ -10,7 +11,7 @@ enum {
     Mode_None,
     Mode_Read = 4,
     Mode_Write,
-    Mode_All = Mode_Read + Mode_Write
+    Mode_All = Mode_Read + Mode_Write,
 };
 
 int alpha, gamma;
@@ -95,11 +96,7 @@ int condition_examples() {
 }
 
 int main() {
-    enum {
-        Local_A,
-        Local_B = 7,
-        Local_C
-    };
+    enum { Local_A, Local_B = 7, Local_C };
     int a, b;
     int total;
     char ch;

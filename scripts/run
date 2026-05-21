@@ -40,4 +40,3 @@ output_file="$build_dir/a.out"
 ./scripts/compile -o "$output_file" "$source_file"
 
 "$output_file"
-

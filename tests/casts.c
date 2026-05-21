@@ -1,5 +1,6 @@
 //# mode: run
 //# exit: 0
+
 char global_zero = 256;
 void *global_null = 0;
 

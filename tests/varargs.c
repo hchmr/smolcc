@@ -1,10 +1,11 @@
 //# mode: run
+//# exit: 0
 //# stdout: sum3(10, 20, 12) = 42
 //# stdout: pick_middle(5, 1, 2, 3, 4, 5) = 2
 //# stdout: pick_middle(4, 1, 2, 3, 4) = 2
-//# exit: 0
 
 #include <stdarg.h>
+
 extern int printf(const char *format, ...);
 
 int sum3(int first, ...) {

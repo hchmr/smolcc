@@ -1,6 +1,7 @@
 //# mode: run
 //# exit: 0
 //# stdout: x = 42, y = 0xff, c = 'A', s = "Hello", % = %, %? = %?
+
 extern void putchar(int c);
 
 void print_int(int n) {
