@@ -378,13 +378,9 @@ static struct type *uac_type(struct type *t1, struct type *t2) {
 
 static struct type *get_common_ptr_type(struct type *t1, struct type *t2) {
     assert("get_common_ptr_type", is_ptr_type(t1) && is_ptr_type(t2));
-    if (t1->ptr_to == t2->ptr_to)
-        return t1;
-    if (is_void_ptr(t1))
-        return t2;
-    if (is_void_ptr(t2))
-        return t1;
-    return 0;
+    if (is_void_ptr(t1) || is_void_ptr(t2))
+        return new_ptr_type(void_type);
+    return t1->ptr_to == t2->ptr_to ? t1 : 0;
 }
 
 static void init_types() {
@@ -887,9 +883,10 @@ static struct expr *elab_expr(struct expr *e) {
         if (is_integer_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
             apply_uac(e->subs);
         } else if (is_ptr_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            unify_ptr_operands(e->subs);
+            if (!type_eq(e->subs[0]->type, e->subs[1]->type))
+                error_at(&e->pos, "pointer types must match");
         } else {
-            error_at(&e->pos, "operands must have arithmetic types");
+            error_at(&e->pos, "operands must be both integers or both pointers");
         }
         e->type = int_type;
     } else if (k == Expr_BitAnd || k == Expr_BitXor || k == Expr_BitOr) {
