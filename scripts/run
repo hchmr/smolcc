@@ -24,12 +24,13 @@ done
 
 shift $((OPTIND - 1))
 
-if [[ $# -ne 1 ]]; then
+if [[ $# -lt 1 ]]; then
     usage
     exit 1
 fi
 
 source_file="$1"
+shift
 
 tmp_root="${TMPDIR:-/tmp}"
 build_dir=$(mktemp -d "${tmp_root%/}/smolcc-run.XXXXXX")
@@ -39,4 +40,4 @@ output_file="$build_dir/a.out"
 
 ./scripts/compile -o "$output_file" "$source_file"
 
-"$output_file"
+"$output_file" "$@"

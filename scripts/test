@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,7 @@ RESET = "\033[0m"
 
 @dataclass
 class spec:
+    args: str | None
     mode: str | None
     exit_code: int | None
     stderr: str | None
@@ -26,7 +28,7 @@ class spec:
 
 
 def parse_directive(line: str) -> tuple[str, str] | None:
-    match = re.fullmatch(r"\s*//\s*#\s*(mode|exit|stderr|stdout)\s*:\s?(.*)", line)
+    match = re.fullmatch(r"\s*//\s*#\s*(args|mode|exit|stderr|stdout)\s*:\s?(.*)", line)
     if match is None:
         return None
     return match.group(1), match.group(2)
@@ -35,6 +37,7 @@ def parse_directive(line: str) -> tuple[str, str] | None:
 def read_spec(path: Path) -> spec:
     lines = path.read_text().splitlines(keepends=True)
 
+    args = None
     mode = None
     exit_code = None
     stderr_parts: list[str] = []
@@ -44,6 +47,8 @@ def read_spec(path: Path) -> spec:
         directive = parse_directive(raw_line.rstrip("\n"))
 
         match directive:
+            case ("args", value) if args is None:
+                args = value
             case ("mode", value) if mode is None:
                 if value not in {"compile-only", "run"}:
                     raise SystemExit(f"{path}: unsupported test mode {value!r}")
@@ -58,6 +63,7 @@ def read_spec(path: Path) -> spec:
                 body_parts.append(raw_line)
 
     return spec(
+        args=args,
         mode=mode,
         exit_code=exit_code,
         stderr="\n".join(stderr_parts) if stderr_parts else None,
@@ -78,6 +84,8 @@ def update_spec(
     lines: list[str] = []
     if spec.mode is not None:
         lines.append(f"//# mode: {spec.mode}\n")
+    if spec.args is not None:
+        lines.append(f"//# args: {spec.args}\n")
     lines.append(f"//# exit: {result.returncode}\n")
     lines.extend(format_output("//# stderr: ", result.stderr))
     if spec.stdout is not None:
@@ -100,11 +108,11 @@ def default_exit_for(path: Path) -> int:
 
 
 def run_command(
-    path: Path, mode: str, env: dict[str, str]
+    path: Path, mode: str, args: list[str], env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
     if mode == "run":
         return subprocess.run(
-            ["./scripts/run", str(path)],
+            ["./scripts/run", str(path)] + args,
             capture_output=True,
             text=True,
             env=env,
@@ -137,9 +145,10 @@ def run_case(path: Path, update: bool) -> bool:
 
     spec = read_spec(path)
     mode = spec.mode or "compile-only"
+    args = shlex.split(spec.args) if spec.args else []
     env = os.environ.copy()
     env["SMOLCC_SKIP_MAKE"] = "1"
-    result = run_command(path, mode, env)
+    result = run_command(path, mode, args, env)
 
     if update:
         update_spec(path, spec, result)
@@ -158,19 +167,19 @@ def run_case(path: Path, update: bool) -> bool:
     if mode == "run" and spec.stdout is not None and actual_stdout != spec.stdout:
         output_failures.append(("stdout", spec.stdout, actual_stdout))
 
-    if result.returncode == want_exit and not output_failures:
-        print(f"{GREEN}OK{RESET}")
-        return True
+    if result.returncode != want_exit or output_failures:
+        print(f"{RED}FAIL{RESET}")
+        if result.returncode != want_exit:
+            print(f"Expected exit code: {want_exit}")
+            print(f"Actual exit code:   {result.returncode}\n")
 
-    print(f"{RED}FAIL{RESET}")
-    if result.returncode != want_exit:
-        print(f"Expected exit code: {want_exit}")
-        print(f"Actual exit code:   {result.returncode}\n")
+        for stream, expected, actual in output_failures:
+            print_text_block(f"Expected {stream}", expected)
+            print_text_block(f"Actual {stream}", actual)
+        return False
 
-    for stream, expected, actual in output_failures:
-        print_text_block(f"Expected {stream}", expected)
-        print_text_block(f"Actual {stream}", actual)
-    return False
+    print(f"{GREEN}OK{RESET}")
+    return True
 
 
 def run_group(paths: list[Path], update: bool) -> int:
@@ -208,7 +217,8 @@ def main() -> int:
     )
 
     failures = sum(
-        run_group(group, args.update) for group in collect_case_groups(args.paths)
+        run_group(group, args.update)
+        for group in collect_case_groups(args.paths)
     )
 
     if args.update:
