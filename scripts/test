@@ -112,7 +112,7 @@ def run_command(
 ) -> subprocess.CompletedProcess[str]:
     if mode == "run":
         return subprocess.run(
-            ["./scripts/run", str(path)] + args,
+            ["./scripts/run", str(path), "--", *args],
             capture_output=True,
             text=True,
             env=env,
