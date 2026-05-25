@@ -1745,31 +1745,6 @@ static void emit_int_load(int val, int reg) {
     }
 }
 
-static void emit_obj(struct sym *sym) {
-    int size = type_size(sym->type), align = type_align(sym->type);
-    if (is_scalar(sym->type)) {
-        write_str(1, ".section .data\n");
-        if (sym->storage_class != Static) {
-            writef(1, ".globl %s\n", sym->name);
-        }
-        writef(1, ".balign %d\n", align);
-        writef(1, "%s:\n", sym->name);
-        if (sym->is_defined) {
-            emit_scalar_data(size, sym->val);
-        } else {
-            emit_scalar_data(size, 0);
-        }
-    } else {
-        if (sym->storage_class != Static) {
-            writef(1, ".globl %s\n", sym->name);
-        }
-        write_str(1, ".section .bss\n");
-        writef(1, ".balign %d\n", align);
-        writef(1, "%s:\n", sym->name);
-        writef(1, ".space %d\n", size);
-    }
-}
-
 static void emit_frame_offset(int offset, int reg) {
     emit_int_load(-offset, reg);
     writef(1, "sub x%d, x29, x%d\n", reg, reg);
@@ -2057,8 +2032,8 @@ static void emit_scalar_expr(struct expr *expr) {
             emit_pop(i);
         }
         writef(1, "bl %s\n", func_sym->name);
-        // if calling a foreign function, we can't be sure
-        // if it will sign-extend or zero the return value.
+        // Normalize the result by sign-extending in case this
+        // is a foreign function returning its result in w0.
         if (is_scalar(expr->type) && type_size(expr->type) < 8) {
             emit_sext(expr->type, 0);
         }
@@ -2168,6 +2143,31 @@ static void emit_func(struct sym *func) {
     write_str(1, "ldp x29, x30, [sp], #16\n");
     write_str(1, "ret\n");
     curr_func = 0;
+}
+
+static void emit_obj(struct sym *sym) {
+    int size = type_size(sym->type), align = type_align(sym->type);
+    if (is_scalar(sym->type)) {
+        write_str(1, ".section .data\n");
+        if (sym->storage_class != Static) {
+            writef(1, ".globl %s\n", sym->name);
+        }
+        writef(1, ".balign %d\n", align);
+        writef(1, "%s:\n", sym->name);
+        if (sym->is_defined) {
+            emit_scalar_data(size, sym->val);
+        } else {
+            emit_scalar_data(size, 0);
+        }
+    } else {
+        if (sym->storage_class != Static) {
+            writef(1, ".globl %s\n", sym->name);
+        }
+        write_str(1, ".section .bss\n");
+        writef(1, ".balign %d\n", align);
+        writef(1, "%s:\n", sym->name);
+        writef(1, ".space %d\n", size);
+    }
 }
 
 static void emit_runtime_helpers() {
