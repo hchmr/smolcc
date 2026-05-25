@@ -1743,7 +1743,7 @@ static void emit_obj(struct sym *sym) {
     int size = type_size(sym->type), align = type_align(sym->type);
     if (is_scalar(sym->type)) {
         write_str(1, ".section .data\n");
-        if (sym->storage_class == Extern) {
+        if (sym->storage_class != Static) {
             writef(1, ".globl %s\n", sym->name);
         }
         writef(1, ".balign %d\n", align);
@@ -1754,7 +1754,7 @@ static void emit_obj(struct sym *sym) {
             emit_scalar_data(size, 0);
         }
     } else {
-        if (sym->storage_class == Extern) {
+        if (sym->storage_class != Static) {
             writef(1, ".globl %s\n", sym->name);
         }
         write_str(1, ".section .bss\n");
