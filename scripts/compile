@@ -58,11 +58,11 @@ else
     exe_file="${output_file}"
 fi
 
-if [[ "${MINICC_SKIP_MAKE:-0}" != "1" ]]; then
+if [[ "${SMOLCC_SKIP_MAKE:-0}" != "1" ]]; then
     env MAKEFLAGS="${MAKEFLAGS:+$MAKEFLAGS }--silent" make
 fi
 
-./out/minicc "$source_file" | ./scripts/asm-fmt > "$asm_file"
+./out/smolcc "$source_file" | ./scripts/asm-fmt > "$asm_file"
 if [[ $stop_after_asm == true ]]; then
     exit 0
 fi

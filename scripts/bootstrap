@@ -7,9 +7,9 @@ make
 mkdir -p out/1 out/2
 rm -rf out/1/* out/2/*
 
-./out/minicc main.c | ./scripts/asm-fmt > out/1/main.s
+./out/smolcc main.c | ./scripts/asm-fmt > out/1/main.s
 as out/1/main.s -o out/1/main.o
-cc -o out/1/minicc out/1/main.o
-./out/1/minicc main.c | ./scripts/asm-fmt > out/2/main.s
+cc -o out/1/smolcc out/1/main.o
+./out/1/smolcc main.c | ./scripts/asm-fmt > out/2/main.s
 diff -u out/1/main.s out/2/main.s
 echo "PASS"

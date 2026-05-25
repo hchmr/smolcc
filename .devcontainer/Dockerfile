@@ -34,8 +34,5 @@ RUN usermod -s /usr/bin/zsh ubuntu \
     && echo "ubuntu ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ubuntu \
     && chmod 0440 /etc/sudoers.d/ubuntu
 
-# Prevent zsh-newuser-install from running on first launch
-RUN touch /home/ubuntu/.zshrc
-
 USER ubuntu
 WORKDIR /home/ubuntu

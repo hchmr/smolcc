@@ -1,5 +1,5 @@
 {
-  "name": "minicc",
+  "name": "smolcc",
   "build": {
     "dockerfile": "Dockerfile"
   },

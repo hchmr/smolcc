@@ -2136,7 +2136,7 @@ static void emit_func(struct sym *func) {
     func->va_area_size = n_va_args * 8;
     curr_func->size = align_up(-func->va_area_offset, 16);
 
-    write_str(1, ".text\n");
+    write_str(1, ".section .text\n");
     if (func->storage_class != Static) {
         writef(1, ".globl %s\n", func->name);
     }
@@ -2166,8 +2166,9 @@ static void emit_func(struct sym *func) {
 
 static void emit_runtime_helpers() {
     write_str(1, ".section .text\n");
-    write_str(1, ".globl _memcpy\n");
-    write_str(1, "_memcpy:\n"); // void *_memcpy(void *d, const void *s, int n)
+    
+    // void *_memcpy(void *d, const void *s, int n)
+    write_str(1, "_memcpy:\n");
     write_str(1, "mov x3, x0\n");
     write_str(1, "cbz x2, .L.memcpy.end\n");
     write_str(1, ".L.memcpy.body:\n");
@@ -2178,8 +2179,8 @@ static void emit_runtime_helpers() {
     write_str(1, ".L.memcpy.end:\n");
     write_str(1, "ret\n");  // x0 still holds dest
 
-    write_str(1, ".section .text\n");
-    write_str(1, "_va_arg:\n"); // void *_va_arg(va_list *ap)
+    // void *_va_arg(va_list *ap)
+    write_str(1, "_va_arg:\n");
     write_str(1, "ldrsw x1, [x0, #24]  // gr_offs\n");
     write_str(1, "cmp w1, #0\n");
     write_str(1, "b.ge .L.va_arg.err\n");
@@ -2212,7 +2213,7 @@ static void emit_str_literals() {
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        write_str(2, "usage: minicc <file>\n");
+        write_str(2, "usage: smolcc <file>\n");
         return 1;
     }
     const char *file_name = argv[1];

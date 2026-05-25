@@ -1,14 +1,14 @@
 OUT_DIR = out
-MINICC = $(OUT_DIR)/minicc
+SMOLCC = $(OUT_DIR)/smolcc
 SRCS = main.c
 OBJS = $(SRCS:%.c=$(OUT_DIR)/%.o)
 CC = cc
 CFLAGS = -Wall -Wextra -Wpedantic -std=c99 \
 	-Wno-strict-prototypes -Wno-parentheses -Wno-return-type -Wno-empty-body -g
 
-all: $(MINICC)
+all: $(SMOLCC)
 
-$(MINICC): $(OBJS)
+$(SMOLCC): $(OBJS)
 	$(CC) -o $@ $^
 
 $(OUT_DIR)/%.o: %.c | $(OUT_DIR)
