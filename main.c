@@ -38,6 +38,10 @@ static void write_char(int fd, int c) {
 }
 
 static void write_int(int fd, int n) {
+    if (n == -2147483647 - 1) {
+        write_str(fd, "-2147483648");
+        return;
+    }
     if (n < 0) {
         write_char(fd, '-');
         n = -n;
@@ -633,9 +637,10 @@ static int is_null_ptr(struct expr *expr) {
 //= eval
 
 static int const_cast(int value, struct type *type) {
-    if (type->kind == Type_Char)
-        return (char)value;
-    else if (type->kind == Type_Int)
+    if (type->kind == Type_Char) {
+        value = value & 255;
+        return value >= 128 ? value - 256 : value;
+    } else if (type->kind == Type_Int)
         return (int)value;
     else
         unreachable_case("const_cast", type->kind);
