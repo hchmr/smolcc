@@ -918,12 +918,12 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (k == Expr_Comma) {
         e->type = e->subs[1]->type;
     } else if (k == Expr_VaStart) {
-        if (curr_func->type->kind != Type_Func || !curr_func->type->is_va)
+        if (!curr_func || curr_func->type->kind != Type_Func || !curr_func->type->is_va)
             error_at(&e->pos, "va_start used outside of a variadic function");
         if (e->subs[0]->type != va_list_type)
             error_at(&e->pos, "va_start operand must be of type va_list");
         if (e->subs[1]->kind != Expr_Ident || e->subs[1]->sym != curr_func->last_param)
-            error_at(&e->pos, "second operand of va_start must be a parameter name");
+            error_at(&e->subs[1]->pos, "second operand of va_start must be a parameter name");
         e->type = void_type;
     } else if (k == Expr_VaEnd) {
         if (e->subs[0]->type != va_list_type)
@@ -1223,6 +1223,8 @@ static struct expr *p_expr(int rbp) {
         expect("(");
         struct type *type = p_typename();
         expect(")");
+        if (!is_object_type(type))
+            error_at(&pos, "sizeof operand must have object type");
         acc = new_expr(&pos, Expr_Num, 0);
         acc->int_val = type_size(type);
     } else if (eat("va_start")) {
@@ -1231,9 +1233,6 @@ static struct expr *p_expr(int rbp) {
         expect(",");
         struct expr *other = p_expr(Prec_Comma);
         expect(")");
-        struct sym *last_param_sym = other->kind == Expr_Ident ? lookup(0, other->name) : 0;
-        if (!last_param_sym || last_param_sym != curr_func->last_param)
-            error_at(&other->pos, "second operand of va_start must be a parameter name");
         acc = new_expr(&pos, Expr_VaStart, 2);
         acc->subs[0] = arg;
         acc->subs[1] = other;
@@ -1519,6 +1518,15 @@ static struct type *p_enum() {
     return int_type;
 }
 
+static struct type *p_decl_array(struct type *base_type) {
+    int len = p_const_expr();
+    expect("]");
+    if (eat("[")) {
+        base_type = p_decl_array(base_type);
+    }
+    return new_array_type(base_type, len);
+}
+
 extern void p_decl(int scope, void *ctx) {
     struct pos pos = tok_pos;
     int storage_class = 0;
@@ -1592,12 +1600,8 @@ extern void p_decl(int scope, void *ctx) {
                 error_at(&name_pos, "bad function return type");
             type = new_func_type(type, param_types, n_params, is_va);
             pop_scope();
-        } else if (at("[")) {
-            while (eat("[")) {
-                int len = p_const_expr();
-                expect("]");
-                type = new_array_type(type, len);
-            }
+        } else if (eat("[")) {
+            type = p_decl_array(type);
         } else if (eat("=") && (scope == Decl_Global || scope == Decl_Local)) {
             init = p_expr(Prec_Comma);
         }
