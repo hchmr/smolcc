@@ -1,0 +1,8 @@
+//# exit: 1
+//# stderr: tests/bad/decl/struct-return-type.c:8:13: error: bad function return type
+
+struct Pair {
+    int left;
+};
+
+struct Pair make_pair();

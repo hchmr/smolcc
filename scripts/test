@@ -125,9 +125,10 @@ def run_command(
 def collect_case_groups(paths: list[Path]) -> list[list[Path]]:
     if paths:
         return [paths]
+    all_paths = sorted(Path("tests").rglob("*.c"))
     return [
-        sorted(Path("tests").glob("*.c")),
-        sorted(Path("tests/bad").glob("*.c")),
+        [path for path in all_paths if "bad" not in path.parts],
+        [path for path in all_paths if "bad" in path.parts],
     ]
 
 
