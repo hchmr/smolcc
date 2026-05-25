@@ -1111,7 +1111,7 @@ static void unexpected_expected(const char *d) {
 static const char *p_ident() {
     if (tok != Tok_Wrd)
         unexpected_expected("identifier");
-    struct string *res = intern(tok_str, tok_len + 1);
+    struct string *res = intern(tok_str, tok_len);
     lex();
     return res->chars;
 }
@@ -1212,7 +1212,7 @@ static struct expr *p_expr(int rbp) {
         acc->int_val = p_num();
     } else if (tok == Tok_Str) {
         acc = new_expr(&pos, Expr_Str, 0);
-        acc->str_val = intern(tok_val.str, tok_val.n + 1);
+        acc->str_val = intern(tok_val.str, tok_val.n);
         lex();
     } else if (tok == Tok_Chr) {
         acc = new_expr(&pos, Expr_Chr, 0);
