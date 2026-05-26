@@ -2109,12 +2109,10 @@ static void emit_str_literals() {
     for (struct string *str = strings; str; str = str->next) {
         if (!str->label)
             continue;
-        const char *chars = str->chars;
         writef(1, ".L.str.%d:\n", str->label);
-        for (int c; (c = *chars++);) {
-            writef(1, ".byte %d\n", c);
+        for (int i = 0; i <= str->len; i++) {
+            writef(1, ".byte %d\n", str->chars[i]);
         }
-        write_str(1, ".byte 0\n");
     }
 }
 
