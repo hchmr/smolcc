@@ -1659,12 +1659,10 @@ static void emit_int_load(int val, int reg) {
     for (int i = 0; i < 4; i++, val = val >> 16) {
         int chunk = val & chunk_mask;
         if (i == 0) {
-            const char *mov_op = val < 0 ? "movn" : "movz";
-            chunk = val < 0 ? ~chunk & chunk_mask : chunk;
-            writef(1, "%s x%d, #%d // %d\n", mov_op, reg, chunk, val);
+            chunk = val < 0 ? chunk | ~chunk_mask : chunk;
+            writef(1, "mov x%d, #%d // %d\n", reg, chunk, val);
         } else if (chunk != default_chunk_value) {
-            int shift = i * 16;
-            writef(1, "movk x%d, #%d, lsl #%d\n", reg, chunk, shift);
+            writef(1, "movk x%d, #%d, lsl #%d\n", reg, chunk, i * 16);
         }
     }
 }
