@@ -107,19 +107,17 @@ static const char *find_chr(const char *s, int c) {
 //=============================================================================
 //= assertions
 
-static void die(const char *label, const char *msg) {
-    writef(2, "%s: %s\n", label, msg);
+static void die(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vwritef(2, fmt, &args);
+    va_end(args);
     abort();
 }
 
 static void assert(const char *label, int condition) {
     if (!condition)
         die(label, "assertion failed");
-}
-
-static void unreachable_case(const char *label, int value) {
-    writef(2, "%s: case not handled: %d\n", label, value);
-    abort();
 }
 
 //=============================================================================
@@ -638,7 +636,7 @@ static int const_cast(int value, struct type *type) {
     else if (type->kind == Type_Int)
         return (int)value;
     else
-        unreachable_case("const_cast", type->kind);
+        die("const_cast: unreachable: %d", type->kind);
 }
 
 static int eval(struct expr *expr) {
@@ -919,7 +917,7 @@ static struct expr *elab_expr(struct expr *e) {
         if (!is_scalar(e->type))
             error_at(&e->pos, "va_arg second operand must have scalar type");
     } else {
-        unreachable_case("elab_expr", k);
+        die("elab_expr: unreachable: %d", k);
     }
     return e;
 }
@@ -1594,7 +1592,7 @@ extern void p_decl(int scope, void *ctx) {
             } else if (scope == Decl_Struct) {
                 declare(&name_pos, (struct sym *)ctx, Sym_Field, 0, name, type, 1);
             } else {
-                unreachable_case("p_decl (object declaration)", scope);
+                die("p_decl (object declaration): unreachable: %d", scope);
             }
         }
 
@@ -1618,7 +1616,7 @@ static const char *get_str_op(struct type *type) {
     else if (type->kind == Type_Ptr)
         return "str x";
     else
-        unreachable_case("get_str_op", type->kind);
+        die("get_str_op: unreachable: %d", type->kind);
 }
 
 static const char *get_ldr_op(struct type *type) {
@@ -1629,7 +1627,7 @@ static const char *get_ldr_op(struct type *type) {
     else if (type->kind == Type_Ptr)
         return "ldr x";
     else
-        unreachable_case("get_ldr_op", type->kind);
+        die("get_ldr_op: unreachable: %d", type->kind);
 }
 
 static void emit_scalar_data(int size, int val) {
@@ -1640,7 +1638,7 @@ static void emit_scalar_data(int size, int val) {
     } else if (size == 8) {
         writef(1, ".quad %d\n", val);
     } else {
-        unreachable_case("emit_data_scalar", size);
+        die("emit_data_scalar: unreachable: %d", size);
     }
 }
 
@@ -1749,7 +1747,7 @@ static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
             emit_assign_to_addr(rhs->type, rhs->subs[1]);
         } else {
             if (!is_addressable(rhs))
-                unreachable_case("emit_assign_to_addr", rhs->kind);
+                die("emit_assign_to_addr: unreachable: %d", rhs->kind);
             emit_place_expr(rhs);
         }
         write_str(1, "mov x1, x0\n");
@@ -1784,7 +1782,7 @@ static void emit_effect_expr(struct expr *expr) {
     } else if (is_lvalue(expr)) {
         emit_place_expr(expr);
     } else {
-        unreachable_case("emit_effect_expr", expr->kind);
+        die("emit_effect_expr: unreachable: %d", expr->kind);
     }
 }
 
@@ -1803,7 +1801,7 @@ static void emit_place_expr(struct expr *expr) {
         } else if (sym->kind == Sym_Local) {
             emit_slot_addr(sym, 0);
         } else {
-            unreachable_case("emit_place_expr (ident)", sym->kind);
+            die("emit_place_expr: unreachable: %d (ident)", sym->kind);
         }
     } else if (k == Expr_Member) {
         emit_place_expr(expr->subs[0]);
@@ -1814,7 +1812,7 @@ static void emit_place_expr(struct expr *expr) {
     } else if (k == Expr_Str) {
         emit_str_load(expr->str_val);
     } else {
-        unreachable_case("emit_place_expr", k);
+        die("emit_place_expr: unreachable: %d", k);
     }
 }
 
@@ -1951,7 +1949,7 @@ static void emit_scalar_expr(struct expr *expr) {
         emit_place_expr(expr->subs[0]);
         write_str(1, "bl _va_arg\n");
     } else {
-        unreachable_case("emit_scalar_expr", k);
+        die("emit_scalar_expr: unreachable: %d", k);
     }
 }
 
@@ -2013,7 +2011,7 @@ static void emit_stmt(struct stmt *stmt) {
     } else if (k == Stmt_Expr) {
         emit_effect_expr(stmt->expr);
     } else if (k != Stmt_Empty) {
-        unreachable_case("emit_stmt", k);
+        die("emit_stmt: unreachable: %d", k);
     }
 }
 
