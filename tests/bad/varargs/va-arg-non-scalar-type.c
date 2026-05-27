@@ -1,5 +1,5 @@
 //# exit: 1
-//# stderr: tests/bad/varargs/va-arg-non-scalar-type.c:12:5: error: va_arg second operand must have scalar type
+//# stderr: tests/bad/varargs/va-arg-non-scalar-type.c:12:5: error: va_arg second operand must be scalar
 #include <stdarg.h>
 
 struct Pair {

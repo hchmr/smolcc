@@ -1,5 +1,5 @@
 //# exit: 1
-//# stderr: tests/bad/decl/struct-return-type.c:8:13: error: bad function return type
+//# stderr: tests/bad/decl/struct-return-type.c:8:13: error: bad return type
 
 struct Pair {
     int left;

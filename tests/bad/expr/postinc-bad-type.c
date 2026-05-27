@@ -1,5 +1,5 @@
 //# exit: 1
-//# stderr: tests/bad/expr/postinc-bad-type.c:9:5: error: cannot increment/decrement operand of this type
+//# stderr: tests/bad/expr/postinc-bad-type.c:9:5: error: operand cannot be incremented/decremented
 struct Pair {
     int value;
 };

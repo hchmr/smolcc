@@ -721,7 +721,7 @@ static struct expr *apply_assign_conv(struct expr *rhs, struct ty *t) {
         return cast_to(t, rhs);
     } else if (is_ptr_ty(t) && is_ptr_ty(rhs->ty)) {
         if (!(t->ptr_to == rhs->ty->ptr_to || is_void_ptr(t) || is_void_ptr(rhs->ty)))
-            err_at(&rhs->pos, "target type mismatch. Pointer types are incompatible.");
+            err_at(&rhs->pos, "target type mismatch");
         return cast_to(t, rhs);
     } else {
         err_at(&rhs->pos, "target type mismatch");
@@ -763,54 +763,54 @@ static struct expr *elab_expr(struct expr *e) {
         e->ty = e->sym->ty;
     } else if (e->kind == Expr_PostInc || e->kind == Expr_PostDec) {
         if (!is_assignable(e->subs[0]))
-            err_at(&e->pos, "operand must be assignable");
+            err_at(&e->pos, "operand not assignable");
         if (!is_integer_ty(e->subs[0]->ty) && !is_ptr_ty(e->subs[0]->ty))
-            err_at(&e->pos, "cannot increment/decrement operand of this type");
+            err_at(&e->pos, "operand cannot be incremented/decremented");
         e->ty = e->subs[0]->ty;
     } else if (e->kind == Expr_Call) {
         struct expr *callee = e->subs[0];
         if (!is_ptr_ty(callee->ty) || callee->ty->ptr_to->kind != Ty_Func)
             err_at(&callee->pos, "called object is not a function");
         if (callee->kind != Expr_Addr || callee->subs[0]->kind != Expr_Func)
-            err_at(&callee->pos, "only direct function calls are supported");
+            err_at(&callee->pos, "indirect calls are not supported");
         struct ty *func = callee->subs[0]->sym->ty;
         struct expr **args = &e->subs[1];
         int n_args = e->n_subs - 1;
         if (n_args > func->n_params && !func->is_va)
-            err_at(&e->pos, "too many arguments in function call");
+                    err_at(&e->pos, "too many arguments");
         if (n_args < func->n_params)
-            err_at(&e->pos, "too few arguments in function call");
+            err_at(&e->pos, "too few arguments");
         for (int i = 0; i < n_args; i++) {
             if (i < func->n_params) {
                 args[i] = apply_assign_conv(args[i], func->param_tys[i]);
             } else {
                 if (!is_scalar(args[i]->ty))
-                    err_at(&args[i]->pos, "variadic arguments must have scalar types");
+                    err_at(&args[i]->pos, "variadic arguments must be scalar");
             }
         }
         e->ty = func->ret_ty;
     } else if (e->kind == Expr_Member) {
         if (e->subs[0]->ty->kind != Ty_Struct)
-            err_at(&e->pos, "member access on non-struct type");
+            err_at(&e->pos, "member access on non-struct");
         struct sym *sym = e->subs[0]->ty->sym;
         if (!sym->is_defined)
-            err_at(&e->pos, "member access on incomplete struct type");
+            err_at(&e->pos, "member access on incomplete struct");
         struct sym *fld = lookup_in(sym->scope, 0, e->fld_name);
         if (!fld)
-            err_at(&e->pos, "member not found in struct");
+            err_at(&e->pos, "no such member");
         e->sym = fld;
         e->ty = fld->ty;
     } else if (e->kind == Expr_Addr) {
         if (!is_addressable(e->subs[0]))
-            err_at(&e->pos, "operand must be addressable");
+            err_at(&e->pos, "operand not addressable");
         e->ty = mk_ptr_ty(e->subs[0]->ty);
     } else if (e->kind == Expr_Deref) {
         if (!is_ptr_ty(e->subs[0]->ty))
-            err_at(&e->pos, "operand must be a pointer");
+            err_at(&e->pos, "operand not a pointer");
         e->ty = e->subs[0]->ty->ptr_to;
     } else if (e->kind == Expr_Neg) {
         if (!is_integer_ty(e->subs[0]->ty))
-            err_at(&e->pos, "operand must be arithmetic");
+            err_at(&e->pos, "operand must be integer");
         e->ty = e->subs[0]->ty;
     } else if (e->kind == Expr_BitNot) {
         if (!is_integer_ty(e->subs[0]->ty))
@@ -822,7 +822,7 @@ static struct expr *elab_expr(struct expr *e) {
         e->ty = int_ty;
     } else if (e->kind == Expr_Cast) {
         if (!is_scalar(e->ty) || !is_scalar(e->subs[0]->ty))
-            err_at(&e->pos, "cast requires scalar types");
+            err_at(&e->pos, "cast requires scalar");
     } else if (e->kind == Expr_Mul || e->kind == Expr_Div || e->kind == Expr_Mod || e->kind == Expr_Add
                || e->kind == Expr_Sub) {
         if (e->kind == Expr_Add && is_integer_ty(e->subs[0]->ty) && is_ptr_ty(e->subs[1]->ty)) {
@@ -844,11 +844,11 @@ static struct expr *elab_expr(struct expr *e) {
             apply_ua_conv(e->subs);
             e->ty = e->subs[0]->ty;
         } else {
-            err_at(&e->pos, "operands must have arithmetic types");
+            err_at(&e->pos, "operands must be arithmetic");
         }
     } else if (e->kind == Expr_Shl || e->kind == Expr_Shr) {
         if (!is_integer_ty(e->subs[0]->ty) || !is_integer_ty(e->subs[1]->ty))
-            err_at(&e->pos, "operands must have integer types");
+            err_at(&e->pos, "operands must be integers");
         e->ty = e->subs[0]->ty;  // lhs determines type
     } else if (e->kind == Expr_Eq || e->kind == Expr_Ne) {
         apply_null_ptr_conv(e->subs);
@@ -857,7 +857,7 @@ static struct expr *elab_expr(struct expr *e) {
         } else if (is_ptr_ty(e->subs[0]->ty) && is_ptr_ty(e->subs[1]->ty)) {
             unify_ptr_subs(e->subs);
         } else {
-            err_at(&e->pos, "operands of equality operators must have compatible types");
+            err_at(&e->pos, "operands must have compatible types");
         }
         e->ty = int_ty;
     } else if (e->kind == Expr_Lt || e->kind == Expr_Le || e->kind == Expr_Gt || e->kind == Expr_Ge) {
@@ -867,7 +867,7 @@ static struct expr *elab_expr(struct expr *e) {
             if (!ty_eq(e->subs[0]->ty, e->subs[1]->ty))
                 err_at(&e->pos, "pointer types must match");
         } else {
-            err_at(&e->pos, "operands must be both integers or both pointers");
+            err_at(&e->pos, "operands must both be integers or pointers");
         }
         e->ty = int_ty;
     } else if (e->kind == Expr_BitAnd || e->kind == Expr_BitXor || e->kind == Expr_BitOr) {
@@ -877,7 +877,7 @@ static struct expr *elab_expr(struct expr *e) {
         e->ty = e->subs[0]->ty;
     } else if (e->kind == Expr_And || e->kind == Expr_Or) {
         if (!is_scalar(e->subs[0]->ty) || !is_scalar(e->subs[1]->ty))
-            err_at(&e->pos, "operands must have scalar types");
+            err_at(&e->pos, "operands must be scalar");
         e->ty = int_ty;
     } else if (e->kind == Expr_Cond) {
         apply_null_ptr_conv(e->subs + 1);
@@ -888,33 +888,33 @@ static struct expr *elab_expr(struct expr *e) {
         } else if (is_ptr_ty(e->subs[1]->ty) && is_ptr_ty(e->subs[2]->ty)) {
             unify_ptr_subs(e->subs + 1);
         } else {
-            err_at(&e->pos, "operands of conditional operator must have compatible types");
+            err_at(&e->pos, "operands must have compatible types");
         }
         e->ty = e->subs[1]->ty;
     } else if (e->kind == Expr_Assign) {
         if (!is_assignable(e->subs[0]))
-            err_at(&e->pos, "operand must be assignable");
+            err_at(&e->pos, "operand not assignable");
         e->subs[1] = apply_assign_conv(e->subs[1], e->subs[0]->ty);
         e->ty = e->subs[0]->ty;
     } else if (e->kind == Expr_Comma) {
         e->ty = e->subs[1]->ty;
     } else if (e->kind == Expr_VaStart) {
         if (!curr_func || curr_func->ty->kind != Ty_Func || !curr_func->ty->is_va)
-            err_at(&e->pos, "va_start used outside of a variadic function");
+            err_at(&e->pos, "va_start outside variadic function");
         if (e->subs[0]->ty != va_list_ty)
-            err_at(&e->pos, "va_start operand must be of type va_list");
+            err_at(&e->pos, "va_start operand must be va_list");
         if (e->subs[1]->kind != Expr_Var || e->subs[1]->sym != curr_func->last_param)
-            err_at(&e->subs[1]->pos, "second operand of va_start must be a parameter name");
+            err_at(&e->subs[1]->pos, "va_start second operand must be parameter name");
         e->ty = void_ty;
     } else if (e->kind == Expr_VaEnd) {
         if (e->subs[0]->ty != va_list_ty)
-            err_at(&e->pos, "va_end operand must be of type va_list");
+            err_at(&e->pos, "va_end operand must be va_list");
         e->ty = void_ty;
     } else if (e->kind == Expr_VaArg) {
         if (e->subs[0]->ty != va_list_ty)
-            err_at(&e->pos, "va_arg first operand must be of type va_list");
+            err_at(&e->pos, "va_arg first operand must be va_list");
         if (!is_scalar(e->ty))
-            err_at(&e->pos, "va_arg second operand must have scalar type");
+            err_at(&e->pos, "va_arg second operand must be scalar");
     } else {
         die("elab_expr: unreachable: %d", e->kind);
     }
@@ -932,7 +932,7 @@ static struct expr *elab_expr_expect(struct expr *e, struct ty *expected) {
 static struct expr *elab_cond_expr(struct expr *e) {
     e = elab_rvalue_expr(e);
     if (!is_scalar(e->ty))
-        err_at(&e->pos, "condition must have scalar type");
+        err_at(&e->pos, "condition must be scalar");
     return e;
 }
 
@@ -1179,7 +1179,7 @@ static struct expr *p_expr(int rbp) {
         struct ty *ty = p_tyname();
         expect(")");
         if (!is_object_ty(ty))
-            err_at(&pos, "sizeof operand must have object type");
+            err_at(&pos, "sizeof operand must be object");
         acc = mk_expr(&pos, Expr_Num, 0);
         acc->int_val = ty_size(ty);
     } else if (eat("va_start")) {
@@ -1215,7 +1215,7 @@ static struct expr *p_expr(int rbp) {
             acc = mk_expr(&pos, Expr_Func, 0);
             acc->sym = sym;
         } else {
-            err_at(&pos, "symbol is not a variable, function, or constant");
+            err_at(&pos, "not a variable, function, or constant");
         }
     } else {
         err_at(&pos, "expected expression");
@@ -1280,7 +1280,7 @@ static struct expr *p_expr(int rbp) {
             struct expr **args = &tmp->subs[1];
             while (!eat(")")) {
                 if (n_args >= MAX_FUNC_PARAMS)
-                    err_at(&pos, "too many arguments in function call");
+                    err_at(&pos, "too many arguments");
                 if (n_args > 0) {
                     expect(",");
                 }
@@ -1385,7 +1385,7 @@ static struct stmt *p_stmt() {
         curr_loop = outer_loop;
     } else if (at("break") || at("continue")) {
         if (!curr_loop)
-            err_at(&pos, "break/continue statement outside loop");
+            err_at(&pos, "break/continue outside loop");
         int kind = eat("break") || !eat("continue") ? Stmt_Break : Stmt_Continue;
         stmt = mk_stmt(&pos, kind);
         stmt->sub = curr_loop;
@@ -1425,7 +1425,7 @@ static struct ty *p_struct() {
     }
 
     if (!name && !is_def)
-        err_at(&name_pos, "declaration of anonymous struct must be a definition");
+        err_at(&name_pos, "anonymous struct must be a definition");
 
     return sym->ty;
 }
@@ -1512,7 +1512,7 @@ static void p_decl(int scope, void *ctx) {
             push_scope();
             for (n_params = 0; !at(")"); n_params++) {
                 if (n_params >= MAX_FUNC_PARAMS)
-                    err_at(&name_pos, "too many parameters in function declaration");
+                    err_at(&name_pos, "too many parameters");
                 if (n_params > 0) {
                     expect(",");
                     if (eat("...")) {
@@ -1525,7 +1525,7 @@ static void p_decl(int scope, void *ctx) {
             }
             expect(")");
             if (!is_scalar(ty) && !is_void_ty(ty))
-                err_at(&name_pos, "bad function return type");
+                err_at(&name_pos, "bad return type");
             ty = mk_func_ty(ty, param_tys, n_params, is_va);
             pop_scope();
         } else if (eat("[")) {
@@ -1553,7 +1553,7 @@ static void p_decl(int scope, void *ctx) {
         } else if (has_params) {
             // function declaration
             if (scope != Decl_Global && scope != Decl_Local)
-                err_at(&name_pos, "function declaration is not allowed here");
+                err_at(&name_pos, "function declaration not allowed here");
             int has_func_body = scope == Decl_Global && n_declarators == 0 && at("{");
             struct sym *sym = declare(&name_pos, 0, Sym_Func, storage, name, ty, has_func_body);
             if (has_func_body) {
@@ -2115,7 +2115,7 @@ int main(int argc, char **argv) {
     }
     const char *file_name = argv[1];
     if (inp = open(file_name, 0, 0), inp < 0) {
-        writef(2, "error: cannot open file '%s'\n", file_name);
+        writef(2, "error: cannot open '%s'\n", file_name);
         return 1;
     }
 

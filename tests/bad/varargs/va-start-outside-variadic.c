@@ -1,5 +1,5 @@
 //# exit: 1
-//# stderr: tests/bad/varargs/va-start-outside-variadic.c:7:5: error: va_start used outside of a variadic function
+//# stderr: tests/bad/varargs/va-start-outside-variadic.c:7:5: error: va_start outside variadic function
 #include <stdarg.h>
 
 int main() {

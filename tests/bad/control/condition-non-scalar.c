@@ -1,5 +1,5 @@
 //# exit: 1
-//# stderr: tests/bad/control/condition-non-scalar.c:9:9: error: condition must have scalar type
+//# stderr: tests/bad/control/condition-non-scalar.c:9:9: error: condition must be scalar
 struct Pair {
     int value;
 };
