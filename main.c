@@ -1,6 +1,6 @@
 #include <stdarg.h>
 
-//============================================================================
+//=============================================================================
 //= unistd
 
 extern int open(const char *pathname, int flags, int mode);
@@ -117,7 +117,7 @@ static void die(const char *fmt, ...) {
 
 static void assert(const char *label, int condition) {
     if (!condition)
-        die(label, "assertion failed");
+        die("%s: assertion failed", label);
 }
 
 //=============================================================================
@@ -130,7 +130,7 @@ static int arena_len;
 static void *alloc(int len) {
     arena_len = align_up(arena_len, 8) + len;
     if (arena_len >= Arena_Cap)
-        die("alloc", "out of memory");
+        die("alloc: out of memory");
     return arena + arena_len - len;
 }
 
@@ -148,7 +148,7 @@ static struct string {
     struct string *next;
 } *strings;
 
-struct string *intern(const char *s, int len) {
+static struct string *intern(const char *s, int len) {
     for (struct string *str = strings; str; str = str->next)
         if (str_eq(str->chars, s))
             return str;
@@ -827,7 +827,7 @@ static struct expr *elab_expr(struct expr *e) {
             error_at(&e->pos, "cast requires scalar types");
     } else if (k == Expr_Mul || k == Expr_Div || k == Expr_Mod || k == Expr_Add || k == Expr_Sub) {
         if (k == Expr_Add && is_integer_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            void *tmp = e->subs[0];
+            struct expr *tmp = e->subs[0];
             e->subs[0] = e->subs[1], e->subs[1] = tmp;
         }
         if (k == Expr_Add && is_ptr_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
@@ -1456,7 +1456,7 @@ static struct type *p_decl_array(struct type *base_type) {
     return new_array_type(base_type, len);
 }
 
-extern void p_decl(int scope, void *ctx) {
+static void p_decl(int scope, void *ctx) {
     struct pos pos = tok_pos;
     int storage_class = 0;
     struct type *base_type = 0;
@@ -1575,8 +1575,6 @@ extern void p_decl(int scope, void *ctx) {
             if (!is_object_type(type))
                 error_at(&name_pos, "bad object type");
             if (scope == Decl_Local) {
-                if (storage_class)
-                    error_at(&name_pos, "storage class specifier is not allowed/supported");
                 struct stmt *decl = new_stmt(&pos, Stmt_Decl);
                 decl->sym = declare(&name_pos, curr_func, Sym_Local, 0, name, type, 1);
                 decl->sub = *(struct stmt **)ctx;
@@ -1606,7 +1604,7 @@ extern void p_decl(int scope, void *ctx) {
 //=============================================================================
 //= codegen
 
-int next_loop_id, next_cond_id, next_str_id;
+static int next_loop_id, next_cond_id, next_str_id;
 
 static const char *get_str_op(struct type *type) {
     if (type->kind == Type_Char)
@@ -1628,18 +1626,6 @@ static const char *get_ldr_op(struct type *type) {
         return "ldr x";
     else
         die("get_ldr_op: unreachable: %d", type->kind);
-}
-
-static void emit_scalar_data(int size, int val) {
-    if (size == 1) {
-        writef(1, ".byte %d\n", val);
-    } else if (size == 4) {
-        writef(1, ".long %d\n", val);
-    } else if (size == 8) {
-        writef(1, ".quad %d\n", val);
-    } else {
-        die("emit_data_scalar: unreachable: %d", size);
-    }
 }
 
 static void emit_str_load(struct string *str) {
@@ -1713,7 +1699,6 @@ static void emit_short_circuit_expr(struct expr *expr, const char *cond) {
     writef(1, ".L.cond.%d.short:\n", cond_id);
     write_str(1, "cmp x0, #0\n");
     write_str(1, "cset x0, ne\n");
-    writef(1, ".L.cond.%d.end:\n", cond_id);
 }
 
 static void emit_cmp_expr(struct expr *expr, const char *cond, const char *ucond) {
@@ -2053,21 +2038,29 @@ static void emit_func(struct sym *func) {
 
 static void emit_obj(struct sym *sym) {
     int size = type_size(sym->type), align = type_align(sym->type);
-    if (is_scalar(sym->type)) {
+    
+    if (is_scalar(sym->type) && sym->is_defined) {
         write_str(1, ".section .data\n");
-        if (sym->storage_class != Static) {
-            writef(1, ".globl %s\n", sym->name);
-        }
-        writef(1, ".balign %d\n", align);
-        writef(1, "%s:\n", sym->name);
-        emit_scalar_data(size, sym->is_defined ? sym->val : 0);
     } else {
-        if (sym->storage_class != Static) {
-            writef(1, ".globl %s\n", sym->name);
-        }
         write_str(1, ".section .bss\n");
-        writef(1, ".balign %d\n", align);
-        writef(1, "%s:\n", sym->name);
+    }
+    if (sym->storage_class != Static) {
+        writef(1, ".globl %s\n", sym->name);
+    }
+    writef(1, ".balign %d\n", align);
+    writef(1, "%s:\n", sym->name);
+    
+    if (is_scalar(sym->type)) {
+        if (size == 1) {
+            writef(1, ".byte %d\n", sym->val);
+        } else if (size == 4) {
+            writef(1, ".long %d\n", sym->val);
+        } else if (size == 8) {
+            writef(1, ".quad %d\n", sym->val);
+        } else {
+            die("emit_obj: unreachable: %d", size);
+        }
+    } else {
         writef(1, ".space %d\n", size);
     }
 }
