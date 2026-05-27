@@ -152,12 +152,12 @@ static struct string *intern(const char *s, int len) {
     for (struct string *str = strings; str; str = str->next)
         if (str_eq(str->chars, s))
             return str;
-    struct string *new_str = alloc(sizeof(struct string));
-    new_str->chars = mem_clone((void *)s, len + 1);
-    new_str->len = len;
-    new_str->next = strings;
-    strings = new_str;
-    return new_str;
+    struct string *mk_str = alloc(sizeof(struct string));
+    mk_str->chars = mem_clone((void *)s, len + 1);
+    mk_str->len = len;
+    mk_str->next = strings;
+    strings = mk_str;
+    return mk_str;
 }
 
 //=============================================================================
@@ -168,7 +168,7 @@ struct pos {
     int line, col;
 };
 
-static void error_at(struct pos *pos, const char *fmt, ...) {
+static void err_at(struct pos *pos, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     writef(2, "%s:%d:%d: error: ", pos->file, pos->line, pos->col);
@@ -199,9 +199,9 @@ enum {
 struct sym {
     int kind;
     struct pos last_pos;
-    int storage_class;
+    int storage;
     const char *name;
-    struct type *type;
+    struct ty *ty;
     int is_defined;
 
     // for Sym_Const
@@ -209,12 +209,12 @@ struct sym {
     // for Sym_Func
     struct stmt *body;
     struct sym *last_param;
-    int va_area_offset, va_area_size;
+    int va_offs, va_size;
     // for Sym_Struct and Sym_Func
     struct scope *scope;
     int size, align;
     // for Sym_Local and Sym_Field
-    int offset;
+    int offs;
 
     struct sym *next;
 };
@@ -223,180 +223,180 @@ struct sym {
 //= types
 
 enum {
-    Type_Void,
-    Type_Char,
-    Type_Int,
-    Type_Ptr,
-    Type_Array,
-    Type_Func,
-    Type_Struct,
-    Type_VaList,
+    Ty_Void,
+    Ty_Char,
+    Ty_Int,
+    Ty_Ptr,
+    Ty_Arr,
+    Ty_Func,
+    Ty_Struct,
+    Ty_VaList,
 };
 
-struct type {
+struct ty {
     int kind;
-    // for Type_Ptr and Type_Array
-    struct type *ptr_to;
-    // for Type_Array
-    int array_len;
-    // for Type_Func
-    struct type *ret_type;
-    struct type *param_types[MAX_FUNC_PARAMS];
+    // for Ty_Ptr and Ty_Arr
+    struct ty *ptr_to;
+    // for Ty_Arr
+    int arr_len;
+    // for Ty_Func
+    struct ty *ret_ty;
+    struct ty *param_tys[MAX_FUNC_PARAMS];
     int n_params, is_va;
-    // for Type_Struct
+    // for Ty_Struct
     struct sym *sym;
     // for type interning
-    struct type *next;
+    struct ty *next;
 };
 
-static struct type *types, *void_type, *char_type, *int_type, *va_list_type;
+static struct ty *tys, *void_ty, *char_ty, *int_ty, *va_list_ty;
 
-static int type_size(struct type *ty) {
-    if (ty->kind == Type_Char) {
+static int ty_size(struct ty *t) {
+    if (t->kind == Ty_Char) {
         return 1;
-    } else if (ty->kind == Type_Int) {
+    } else if (t->kind == Ty_Int) {
         return 4;
-    } else if (ty->kind == Type_Ptr) {
+    } else if (t->kind == Ty_Ptr) {
         return 8;
-    } else if (ty->kind == Type_Array) {
-        return type_size(ty->ptr_to) * ty->array_len;
-    } else if (ty->kind == Type_Struct) {
-        return ty->sym->is_defined ? ty->sym->size : 0;
-    } else if (ty->kind == Type_VaList) {
+    } else if (t->kind == Ty_Arr) {
+        return ty_size(t->ptr_to) * t->arr_len;
+    } else if (t->kind == Ty_Struct) {
+        return t->sym->is_defined ? t->sym->size : 0;
+    } else if (t->kind == Ty_VaList) {
         return 32;
     } else {
         return 0;
     }
 }
 
-static int type_align(struct type *ty) {
-    if (ty->kind == Type_Array) {
-        return type_align(ty->ptr_to);
-    } else if (ty->kind == Type_Struct) {
-        return ty->sym->is_defined ? ty->sym->align : 0;
-    } else if (ty->kind == Type_VaList) {
+static int ty_align(struct ty *t) {
+    if (t->kind == Ty_Arr) {
+        return ty_align(t->ptr_to);
+    } else if (t->kind == Ty_Struct) {
+        return t->sym->is_defined ? t->sym->align : 0;
+    } else if (t->kind == Ty_VaList) {
         return 8;
     } else {
-        return type_size(ty);
+        return ty_size(t);
     }
 }
 
 // type predicates
 
-static int type_eq(struct type *a, struct type *b) {
+static int ty_eq(struct ty *a, struct ty *b) {
     if (a == b) {
         return 1;
     } else if (a->kind != b->kind) {
         return 0;
-    } else if (a->kind == Type_Ptr) {
+    } else if (a->kind == Ty_Ptr) {
         return a->ptr_to == b->ptr_to;
-    } else if (a->kind == Type_Array) {
-        return a->array_len == b->array_len && a->ptr_to == b->ptr_to;
-    } else if (a->kind == Type_Func) {
-        if (a->ret_type != b->ret_type || a->n_params != b->n_params || a->is_va != b->is_va)
+    } else if (a->kind == Ty_Arr) {
+        return a->arr_len == b->arr_len && a->ptr_to == b->ptr_to;
+    } else if (a->kind == Ty_Func) {
+        if (a->ret_ty != b->ret_ty || a->n_params != b->n_params || a->is_va != b->is_va)
             return 0;
         for (int i = 0; i < a->n_params; i++)
-            if (a->param_types[i] != b->param_types[i])
+            if (a->param_tys[i] != b->param_tys[i])
                 return 0;
         return 1;
-    } else if (a->kind == Type_Struct) {
+    } else if (a->kind == Ty_Struct) {
         return a->sym == b->sym;
     } else {
         return 1;
     }
 }
 
-static int is_integer_type(struct type *ty) {
-    return ty->kind == Type_Int || ty->kind == Type_Char;
+static int is_integer_ty(struct ty *t) {
+    return t->kind == Ty_Int || t->kind == Ty_Char;
 }
-static int is_void_type(struct type *ty) {
-    return ty->kind == Type_Void;
+static int is_void_ty(struct ty *t) {
+    return t->kind == Ty_Void;
 }
-static int is_ptr_type(struct type *ty) {
-    return ty->kind == Type_Ptr;
+static int is_ptr_ty(struct ty *t) {
+    return t->kind == Ty_Ptr;
 }
-static int is_scalar(struct type *ty) {
-    return is_integer_type(ty) || is_ptr_type(ty);
+static int is_scalar(struct ty *t) {
+    return is_integer_ty(t) || is_ptr_ty(t);
 }
-static int is_func_type(struct type *ty) {
-    return ty->kind == Type_Func;
+static int is_func_ty(struct ty *t) {
+    return t->kind == Ty_Func;
 }
-static int is_void_ptr(struct type *ty) {
-    return is_ptr_type(ty) && ty->ptr_to->kind == Type_Void;
+static int is_void_ptr(struct ty *t) {
+    return is_ptr_ty(t) && t->ptr_to->kind == Ty_Void;
 }
-static int is_array_type(struct type *ty) {
-    return ty->kind == Type_Array;
+static int is_arr_ty(struct ty *t) {
+    return t->kind == Ty_Arr;
 }
-static int is_object_type(struct type *ty) {
-    return type_size(ty) > 0;
-}
-
-static struct type *intern_type(struct type *ty) {
-    for (struct type *t = types; t; t = t->next)
-        if (type_eq(t, ty))
-            return t;
-    struct type *t = mem_clone(ty, sizeof(struct type));
-    t->next = types;
-    types = t;
-    return t;
+static int is_object_ty(struct ty *t) {
+    return ty_size(t) > 0;
 }
 
-static struct type *new_ptr_type(struct type *base) {
-    struct type ty;
-    ty.kind = Type_Ptr;
-    ty.ptr_to = base;
-    return intern_type(&ty);
+static struct ty *intern_ty(struct ty *t) {
+    for (struct ty *u = tys; u; u = u->next)
+        if (ty_eq(t, u))
+            return u;
+    struct ty *u = mem_clone(t, sizeof(struct ty));
+    u->next = tys;
+    tys = u;
+    return u;
 }
 
-static struct type *new_array_type(struct type *base, int len) {
-    struct type ty;
-    ty.kind = Type_Array;
-    ty.ptr_to = base;
-    ty.array_len = len;
-    return intern_type(&ty);
+static struct ty *mk_ptr_ty(struct ty *base) {
+    struct ty t;
+    t.kind = Ty_Ptr;
+    t.ptr_to = base;
+    return intern_ty(&t);
 }
 
-static struct type *new_struct_type(struct sym *sym) {
-    struct type ty;
-    ty.kind = Type_Struct;
-    ty.sym = sym;
-    return intern_type(&ty);
+static struct ty *mk_arr_ty(struct ty *base, int len) {
+    struct ty t;
+    t.kind = Ty_Arr;
+    t.ptr_to = base;
+    t.arr_len = len;
+    return intern_ty(&t);
 }
 
-static struct type *new_func_type(struct type *ret_type, struct type **param_types, int n_params, int is_va) {
-    struct type ty;
-    ty.kind = Type_Func;
-    ty.ret_type = ret_type;
+static struct ty *mk_struct_ty(struct sym *sym) {
+    struct ty t;
+    t.kind = Ty_Struct;
+    t.sym = sym;
+    return intern_ty(&t);
+}
+
+static struct ty *mk_func_ty(struct ty *ret_ty, struct ty **param_tys, int n_params, int is_va) {
+    struct ty t;
+    t.kind = Ty_Func;
+    t.ret_ty = ret_ty;
     for (int i = 0; i < n_params; i++) {
-        ty.param_types[i] = param_types[i];
+        t.param_tys[i] = param_tys[i];
     }
-    ty.n_params = n_params;
-    ty.is_va = is_va;
-    return intern_type(&ty);
+    t.n_params = n_params;
+    t.is_va = is_va;
+    return intern_ty(&t);
 }
 
-static struct type *uac_type(struct type *t1, struct type *t2) {
-    assert("uac_type", is_integer_type(t1) && is_integer_type(t2));
+static struct ty *uac_ty(struct ty *t1, struct ty *t2) {
+    assert("uac_ty", is_integer_ty(t1) && is_integer_ty(t2));
     return t1->kind < t2->kind ? t2 : t1;
 }
 
-static struct type *get_common_ptr_type(struct type *t1, struct type *t2) {
-    assert("get_common_ptr_type", is_ptr_type(t1) && is_ptr_type(t2));
+static struct ty *get_common_ptr_ty(struct ty *t1, struct ty *t2) {
+    assert("get_common_ptr_ty", is_ptr_ty(t1) && is_ptr_ty(t2));
     if (is_void_ptr(t1) || is_void_ptr(t2))
-        return new_ptr_type(void_type);
+        return mk_ptr_ty(void_ty);
     return t1->ptr_to == t2->ptr_to ? t1 : 0;
 }
 
-static void init_types() {
-    struct type tmp;
-    tmp.kind = Type_Void;
-    void_type = intern_type(&tmp);
-    tmp.kind = Type_Char;
-    char_type = intern_type(&tmp);
-    tmp.kind = Type_Int;
-    int_type = intern_type(&tmp);
-    tmp.kind = Type_VaList;
-    va_list_type = intern_type(&tmp);
+static void init_tys() {
+    struct ty tmp;
+    tmp.kind = Ty_Void;
+    void_ty = intern_ty(&tmp);
+    tmp.kind = Ty_Char;
+    char_ty = intern_ty(&tmp);
+    tmp.kind = Ty_Int;
+    int_ty = intern_ty(&tmp);
+    tmp.kind = Ty_VaList;
+    va_list_ty = intern_ty(&tmp);
 }
 
 //=============================================================================
@@ -447,11 +447,11 @@ static struct sym *lookup(int ns, const char *name) {
 
 static void decl_conflict(struct pos *pos, struct sym *sym, const char *msg) {
     struct pos other = sym->last_pos;
-    error_at(pos, "'%s' %s. Previous declaration at %s:%d:%d", sym->name, msg, other.file, other.line, other.col);
+    err_at(pos, "'%s' %s. Previous declaration at %s:%d:%d", sym->name, msg, other.file, other.line, other.col);
 }
 
-static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, int storage_class, const char *name,
-                           struct type *type, int is_def) {
+static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, int storage, const char *name,
+                           struct ty *ty, int is_def) {
     struct scope *scope = curr_scope;
     if (parent_sym && parent_sym->kind == Sym_Struct) {
         scope = parent_sym->scope;
@@ -461,13 +461,13 @@ static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, in
     if (sym) {
         if (sym->kind != kind)
             decl_conflict(pos, sym, "already declared as a different kind of symbol");
-        if (kind != Sym_Struct && sym->type != type)
+        if (kind != Sym_Struct && sym->ty != ty)
             decl_conflict(pos, sym, "already declared with a different type");
         if (is_def && sym->is_defined)
             decl_conflict(pos, sym, "already defined");
-        if (kind == Sym_Global && sym->storage_class == Static && storage_class == 0)
+        if (kind == Sym_Global && sym->storage == Static && storage == 0)
             decl_conflict(pos, sym, "already declared as static");
-        if ((kind == Sym_Global || kind == Sym_Func) && sym->storage_class != Static && storage_class == Static)
+        if ((kind == Sym_Global || kind == Sym_Func) && sym->storage != Static && storage == Static)
             decl_conflict(pos, sym, "already declared as non-static");
         if (kind != Sym_Struct) {
             sym->is_defined = sym->is_defined | is_def;
@@ -475,17 +475,17 @@ static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, in
         return sym;
     }
     sym = add_sym(pos, scope, kind, name);
-    sym->type = kind == Sym_Struct ? new_struct_type(sym) : type;
+    sym->ty = kind == Sym_Struct ? mk_struct_ty(sym) : ty;
     sym->is_defined = is_def;
-    sym->storage_class = storage_class;
+    sym->storage = storage;
     if (parent_sym && (kind == Sym_Local || kind == Sym_Field)) {
-        int size = type_size(type), align = type_align(type);
+        int size = ty_size(ty), align = ty_align(ty);
         if (kind == Sym_Local) {
-            sym->offset = -align_up(parent_sym->size + size, align);
-            parent_sym->size = -sym->offset;
+            sym->offs = -align_up(parent_sym->size + size, align);
+            parent_sym->size = -sym->offs;
         } else {
-            sym->offset = align_up(parent_sym->size, align);
-            parent_sym->size = sym->offset + size;
+            sym->offs = align_up(parent_sym->size, align);
+            parent_sym->size = sym->offs + size;
         }
 
         if (parent_sym->align < align) {
@@ -547,11 +547,11 @@ enum {
 struct expr {
     int kind;
     struct pos pos;
-    struct type *type;
+    struct ty *ty;
 
     int int_val;
     struct string *str_val;
-    const char *field_name;
+    const char *fld_name;
     struct expr **subs;
     int n_subs;
 
@@ -577,93 +577,93 @@ struct stmt {
     struct stmt *sub;
     struct sym *sym;
     struct expr *expr;
-    struct type *type;
+    struct ty *ty;
 
     int loop_id;
 
     struct stmt *next;
 };
 
-static struct expr *new_expr(struct pos *pos, int kind, int n_args) {
-    struct expr *expr = alloc(sizeof(struct expr));
-    expr->pos = *pos;
-    expr->kind = kind;
-    expr->n_subs = n_args;
-    expr->subs = alloc(sizeof(struct expr *) * n_args);
-    return expr;
+static struct expr *mk_expr(struct pos *pos, int kind, int n_args) {
+    struct expr *e = alloc(sizeof(struct expr));
+    e->pos = *pos;
+    e->kind = kind;
+    e->n_subs = n_args;
+    e->subs = alloc(sizeof(struct expr *) * n_args);
+    return e;
 }
 
-static struct expr *new_unary_expr(struct pos *pos, int kind, struct expr *sub) {
-    struct expr *expr = new_expr(pos, kind, 1);
-    expr->subs[0] = sub;
-    return expr;
+static struct expr *mk_unary_expr(struct pos *pos, int kind, struct expr *sub) {
+    struct expr *e = mk_expr(pos, kind, 1);
+    e->subs[0] = sub;
+    return e;
 }
 
-static struct expr *new_bin_expr(int kind, struct expr *lhs, struct expr *rhs) {
-    struct expr *expr = new_expr(&lhs->pos, kind, 2);
-    expr->subs[0] = lhs;
-    expr->subs[1] = rhs;
-    return expr;
+static struct expr *mk_bin_expr(int kind, struct expr *e1, struct expr *e2) {
+    struct expr *e = mk_expr(&e1->pos, kind, 2);
+    e->subs[0] = e1;
+    e->subs[1] = e2;
+    return e;
 }
 
-static struct stmt *new_stmt(struct pos *pos, int kind) {
-    struct stmt *stmt = alloc(sizeof(struct stmt));
-    stmt->pos = *pos;
-    stmt->kind = kind;
-    return stmt;
+static struct stmt *mk_stmt(struct pos *pos, int kind) {
+    struct stmt *s = alloc(sizeof(struct stmt));
+    s->pos = *pos;
+    s->kind = kind;
+    return s;
 }
 
-static int is_lvalue(struct expr *expr) {
-    return expr->kind == Expr_Var || expr->kind == Expr_Deref || expr->kind == Expr_Member;
+static int is_lvalue(struct expr *e) {
+    return e->kind == Expr_Var || e->kind == Expr_Deref || e->kind == Expr_Member;
 }
-static int is_addressable(struct expr *expr) {
-    return is_lvalue(expr) || expr->kind == Expr_Func || expr->kind == Expr_Str;
+static int is_addressable(struct expr *e) {
+    return is_lvalue(e) || e->kind == Expr_Func || e->kind == Expr_Str;
 }
-static int is_assignable(struct expr *expr) {
-    return is_lvalue(expr) && is_object_type(expr->type);
+static int is_assignable(struct expr *e) {
+    return is_lvalue(e) && is_object_ty(e->ty);
 }
-static int is_null_ptr(struct expr *expr) {
-    return expr->kind == Expr_Num && expr->int_val == 0
-        || expr->kind == Expr_Cast && is_void_ptr(expr->type) && is_null_ptr(expr->subs[0]);
+static int is_null_ptr(struct expr *e) {
+    return e->kind == Expr_Num && e->int_val == 0
+        || e->kind == Expr_Cast && is_void_ptr(e->ty) && is_null_ptr(e->subs[0]);
 }
 
 //=============================================================================
 //= eval
 
-static int const_cast(int value, struct type *type) {
-    if (type->kind == Type_Char)
-        return value = value & 255, value >= 128 ? value - 256 : value;
-    else if (type->kind == Type_Int)
-        return (int)value;
+static int const_cast(int v, struct ty *t) {
+    if (t->kind == Ty_Char)
+        return v = v & 255, v >= 128 ? v - 256 : v;
+    else if (t->kind == Ty_Int)
+        return (int)v;
     else
-        die("const_cast: unreachable: %d", type->kind);
+        die("const_cast: unreachable: %d", t->kind);
 }
 
-static int eval(struct expr *expr) {
-    if (expr->kind == Expr_Num) {
-        return expr->int_val;
-    } else if (expr->kind == Expr_Neg) {
-        return -eval(expr->subs[0]);
-    } else if (expr->kind == Expr_Add) {
-        return eval(expr->subs[0]) + eval(expr->subs[1]);
-    } else if (expr->kind == Expr_Sub) {
-        return eval(expr->subs[0]) - eval(expr->subs[1]);
-    } else if (expr->kind == Expr_Mul) {
-        return eval(expr->subs[0]) * eval(expr->subs[1]);
-    } else if (expr->kind == Expr_Shl) {
-        return eval(expr->subs[0]) << eval(expr->subs[1]);
-    } else if (expr->kind == Expr_Shr) {
-        return eval(expr->subs[0]) >> eval(expr->subs[1]);
-    } else if (expr->kind == Expr_Cast) {
-        if (is_ptr_type(expr->type) && is_null_ptr(expr->subs[0])) {
+static int eval(struct expr *e) {
+    if (e->kind == Expr_Num) {
+        return e->int_val;
+    } else if (e->kind == Expr_Neg) {
+        return -eval(e->subs[0]);
+    } else if (e->kind == Expr_Add) {
+        return eval(e->subs[0]) + eval(e->subs[1]);
+    } else if (e->kind == Expr_Sub) {
+        return eval(e->subs[0]) - eval(e->subs[1]);
+    } else if (e->kind == Expr_Mul) {
+        return eval(e->subs[0]) * eval(e->subs[1]);
+    } else if (e->kind == Expr_Shl) {
+        return eval(e->subs[0]) << eval(e->subs[1]);
+    } else if (e->kind == Expr_Shr) {
+        return eval(e->subs[0]) >> eval(e->subs[1]);
+    } else if (e->kind == Expr_Cast) {
+        if (is_ptr_ty(e->ty) && is_null_ptr(e->subs[0])) {
             return 0;
-        } else if (is_integer_type(expr->type) && is_integer_type(expr->subs[0]->type)) {
-            return const_cast(eval(expr->subs[0]), expr->type);
+        } else if (is_integer_ty(e->ty) && is_integer_ty(e->subs[0]->ty)) {
+            return const_cast(eval(e->subs[0]), e->ty);
         } else {
-            error_at(&expr->pos, "bad cast in constant expression");
+            err_at(&e->pos, "bad cast in constant expression");
         }
     } else {
-        error_at(&expr->pos, "expression cannot be evaluated at compile time");
+        err_at(&e->pos, "expression cannot be evaluated at compile time");
     }
 }
 
@@ -673,66 +673,66 @@ static int eval(struct expr *expr) {
 static struct sym *curr_func;
 static struct stmt *curr_loop;
 
-static struct expr *wrap_with(int kind, struct type *type, struct expr *orig) {
-    struct expr *wrapper = new_expr(&orig->pos, kind, 1);
-    wrapper->type = type;
+static struct expr *wrap_with(int kind, struct ty *ty, struct expr *orig) {
+    struct expr *wrapper = mk_expr(&orig->pos, kind, 1);
+    wrapper->ty = ty;
     wrapper->subs[0] = orig;
     return wrapper;
 }
 
 // coercion
-static struct expr *cast_to(struct type *t, struct expr *e) {
-    assert("cast_to", is_scalar(t) && is_scalar(e->type));
-    if (e->type == t)
+static struct expr *cast_to(struct ty *t, struct expr *e) {
+    assert("cast_to", is_scalar(t) && is_scalar(e->ty));
+    if (e->ty == t)
         return e;
     return wrap_with(Expr_Cast, t, e);
 }
 
-static void apply_uac(struct expr **args) {
-    assert("apply_uac", is_integer_type(args[0]->type) && is_integer_type(args[1]->type));
-    struct type *target_type = uac_type(args[0]->type, args[1]->type);
-    args[0] = cast_to(target_type, args[0]);
-    args[1] = cast_to(target_type, args[1]);
+static void apply_ua_conv(struct expr **args) {
+    assert("apply_ua_conv", is_integer_ty(args[0]->ty) && is_integer_ty(args[1]->ty));
+    struct ty *target_ty = uac_ty(args[0]->ty, args[1]->ty);
+    args[0] = cast_to(target_ty, args[0]);
+    args[1] = cast_to(target_ty, args[1]);
 }
 
-static void apply_null_ptr_conversion(struct expr **args) {
-    if (is_null_ptr(args[0]) && is_ptr_type(args[1]->type)) {
-        args[0] = cast_to(args[1]->type, args[0]);
-    } else if (is_null_ptr(args[1]) && is_ptr_type(args[0]->type)) {
-        args[1] = cast_to(args[0]->type, args[1]);
+static void apply_null_ptr_conv(struct expr **args) {
+    if (is_null_ptr(args[0]) && is_ptr_ty(args[1]->ty)) {
+        args[0] = cast_to(args[1]->ty, args[0]);
+    } else if (is_null_ptr(args[1]) && is_ptr_ty(args[0]->ty)) {
+        args[1] = cast_to(args[0]->ty, args[1]);
     }
 }
 
-static void unify_ptr_operands(struct expr **args) {
-    assert("unify_ptr_operands", is_ptr_type(args[0]->type) && is_ptr_type(args[1]->type));
-    struct type *ptr_type = get_common_ptr_type(args[0]->type, args[1]->type);
-    if (!ptr_type)
-        error_at(&args[0]->pos, "incompatible pointer operands");
-    args[0] = cast_to(ptr_type, args[0]);
-    args[1] = cast_to(ptr_type, args[1]);
+static void unify_ptr_subs(struct expr **args) {
+    assert("unify_ptr_subs", is_ptr_ty(args[0]->ty) && is_ptr_ty(args[1]->ty));
+    struct ty *ptr_ty = get_common_ptr_ty(args[0]->ty, args[1]->ty);
+    if (!ptr_ty)
+        err_at(&args[0]->pos, "incompatible pointer operands");
+    args[0] = cast_to(ptr_ty, args[0]);
+    args[1] = cast_to(ptr_ty, args[1]);
 }
 
-static struct expr *apply_assignment_conversion(struct expr *rhs, struct type *t) {
-    if (rhs->type == t) {
+static struct expr *apply_assign_conv(struct expr *rhs, struct ty *t) {
+    if (rhs->ty == t) {
         return rhs;
-    } else if (is_integer_type(rhs->type) && is_integer_type(t)) {
+    } else if (is_integer_ty(rhs->ty) && is_integer_ty(t)) {
         return cast_to(t, rhs);
-    } else if (is_ptr_type(t) && is_null_ptr(rhs)) {
+    } else if (is_ptr_ty(t) && is_null_ptr(rhs)) {
         return cast_to(t, rhs);
-    } else if (is_ptr_type(t) && is_ptr_type(rhs->type)) {
-        if (!(t->ptr_to == rhs->type->ptr_to || is_void_ptr(t) || is_void_ptr(rhs->type)))
-            error_at(&rhs->pos, "target type mismatch. Pointer types are incompatible.");
+    } else if (is_ptr_ty(t) && is_ptr_ty(rhs->ty)) {
+        if (!(t->ptr_to == rhs->ty->ptr_to || is_void_ptr(t) || is_void_ptr(rhs->ty)))
+            err_at(&rhs->pos, "target type mismatch. Pointer types are incompatible.");
         return cast_to(t, rhs);
     } else {
-        error_at(&rhs->pos, "target type mismatch");
+        err_at(&rhs->pos, "target type mismatch");
     }
 }
 
 static struct expr *ptr_decay(struct expr *e) {
-    if (is_array_type(e->type)) {
-        return wrap_with(Expr_Cast, new_ptr_type(e->type->ptr_to), wrap_with(Expr_Addr, new_ptr_type(e->type), e));
-    } else if (is_func_type(e->type)) {
-        return wrap_with(Expr_Addr, new_ptr_type(e->type), e);
+    if (is_arr_ty(e->ty)) {
+        return wrap_with(Expr_Cast, mk_ptr_ty(e->ty->ptr_to), wrap_with(Expr_Addr, mk_ptr_ty(e->ty), e));
+    } else if (is_func_ty(e->ty)) {
+        return wrap_with(Expr_Addr, mk_ptr_ty(e->ty), e);
     } else {
         return e;
     }
@@ -750,201 +750,200 @@ static void elab_subexprs(struct expr *e) {
 }
 
 static struct expr *elab_expr(struct expr *e) {
-    int k = e->kind;
-
     elab_subexprs(e);
 
-    if (k == Expr_Num) {
-        e->type = int_type;
-    } else if (k == Expr_Chr) {
+    if (e->kind == Expr_Num) {
+        e->ty = int_ty;
+    } else if (e->kind == Expr_Chr) {
         e->kind = Expr_Num;
-        e->type = char_type;
-    } else if (k == Expr_Str) {
-        e->type = new_array_type(char_type, e->str_val->len + 1);
-    } else if (k == Expr_Var || k == Expr_Func) {
-        e->type = e->sym->type;
-    } else if (k == Expr_PostInc || k == Expr_PostDec) {
+        e->ty = char_ty;
+    } else if (e->kind == Expr_Str) {
+        e->ty = mk_arr_ty(char_ty, e->str_val->len + 1);
+    } else if (e->kind == Expr_Var || e->kind == Expr_Func) {
+        e->ty = e->sym->ty;
+    } else if (e->kind == Expr_PostInc || e->kind == Expr_PostDec) {
         if (!is_assignable(e->subs[0]))
-            error_at(&e->pos, "operand must be assignable");
-        if (!is_integer_type(e->subs[0]->type) && !is_ptr_type(e->subs[0]->type))
-            error_at(&e->pos, "cannot increment/decrement operand of this type");
-        e->type = e->subs[0]->type;
-    } else if (k == Expr_Call) {
+            err_at(&e->pos, "operand must be assignable");
+        if (!is_integer_ty(e->subs[0]->ty) && !is_ptr_ty(e->subs[0]->ty))
+            err_at(&e->pos, "cannot increment/decrement operand of this type");
+        e->ty = e->subs[0]->ty;
+    } else if (e->kind == Expr_Call) {
         struct expr *callee = e->subs[0];
-        if (!is_ptr_type(callee->type) || callee->type->ptr_to->kind != Type_Func)
-            error_at(&callee->pos, "called object is not a function");
+        if (!is_ptr_ty(callee->ty) || callee->ty->ptr_to->kind != Ty_Func)
+            err_at(&callee->pos, "called object is not a function");
         if (callee->kind != Expr_Addr || callee->subs[0]->kind != Expr_Func)
-            error_at(&callee->pos, "only direct function calls are supported");
-        struct type *func = callee->subs[0]->sym->type;
+            err_at(&callee->pos, "only direct function calls are supported");
+        struct ty *func = callee->subs[0]->sym->ty;
         struct expr **args = &e->subs[1];
         int n_args = e->n_subs - 1;
         if (n_args > func->n_params && !func->is_va)
-            error_at(&e->pos, "too many arguments in function call");
+            err_at(&e->pos, "too many arguments in function call");
         if (n_args < func->n_params)
-            error_at(&e->pos, "too few arguments in function call");
+            err_at(&e->pos, "too few arguments in function call");
         for (int i = 0; i < n_args; i++) {
             if (i < func->n_params) {
-                args[i] = apply_assignment_conversion(args[i], func->param_types[i]);
+                args[i] = apply_assign_conv(args[i], func->param_tys[i]);
             } else {
-                if (!is_scalar(args[i]->type))
-                    error_at(&args[i]->pos, "variadic arguments must have scalar types");
+                if (!is_scalar(args[i]->ty))
+                    err_at(&args[i]->pos, "variadic arguments must have scalar types");
             }
         }
-        e->type = func->ret_type;
-    } else if (k == Expr_Member) {
-        if (e->subs[0]->type->kind != Type_Struct)
-            error_at(&e->pos, "member access on non-struct type");
-        struct sym *sym = e->subs[0]->type->sym;
+        e->ty = func->ret_ty;
+    } else if (e->kind == Expr_Member) {
+        if (e->subs[0]->ty->kind != Ty_Struct)
+            err_at(&e->pos, "member access on non-struct type");
+        struct sym *sym = e->subs[0]->ty->sym;
         if (!sym->is_defined)
-            error_at(&e->pos, "member access on incomplete struct type");
-        struct sym *field = lookup_in(sym->scope, 0, e->field_name);
-        if (!field)
-            error_at(&e->pos, "member not found in struct");
-        e->sym = field;
-        e->type = field->type;
-    } else if (k == Expr_Addr) {
+            err_at(&e->pos, "member access on incomplete struct type");
+        struct sym *fld = lookup_in(sym->scope, 0, e->fld_name);
+        if (!fld)
+            err_at(&e->pos, "member not found in struct");
+        e->sym = fld;
+        e->ty = fld->ty;
+    } else if (e->kind == Expr_Addr) {
         if (!is_addressable(e->subs[0]))
-            error_at(&e->pos, "operand must be addressable");
-        e->type = new_ptr_type(e->subs[0]->type);
-    } else if (k == Expr_Deref) {
-        if (!is_ptr_type(e->subs[0]->type))
-            error_at(&e->pos, "operand must be a pointer");
-        e->type = e->subs[0]->type->ptr_to;
-    } else if (k == Expr_Neg) {
-        if (!is_integer_type(e->subs[0]->type))
-            error_at(&e->pos, "operand must be arithmetic");
-        e->type = e->subs[0]->type;
-    } else if (k == Expr_BitNot) {
-        if (!is_integer_type(e->subs[0]->type))
-            error_at(&e->pos, "operand must be integer");
-        e->type = e->subs[0]->type;
-    } else if (k == Expr_Not) {
-        if (!is_scalar(e->subs[0]->type))
-            error_at(&e->pos, "operand must be scalar");
-        e->type = int_type;
-    } else if (k == Expr_Cast) {
-        if (!is_scalar(e->type) || !is_scalar(e->subs[0]->type))
-            error_at(&e->pos, "cast requires scalar types");
-    } else if (k == Expr_Mul || k == Expr_Div || k == Expr_Mod || k == Expr_Add || k == Expr_Sub) {
-        if (k == Expr_Add && is_integer_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
+            err_at(&e->pos, "operand must be addressable");
+        e->ty = mk_ptr_ty(e->subs[0]->ty);
+    } else if (e->kind == Expr_Deref) {
+        if (!is_ptr_ty(e->subs[0]->ty))
+            err_at(&e->pos, "operand must be a pointer");
+        e->ty = e->subs[0]->ty->ptr_to;
+    } else if (e->kind == Expr_Neg) {
+        if (!is_integer_ty(e->subs[0]->ty))
+            err_at(&e->pos, "operand must be arithmetic");
+        e->ty = e->subs[0]->ty;
+    } else if (e->kind == Expr_BitNot) {
+        if (!is_integer_ty(e->subs[0]->ty))
+            err_at(&e->pos, "operand must be integer");
+        e->ty = e->subs[0]->ty;
+    } else if (e->kind == Expr_Not) {
+        if (!is_scalar(e->subs[0]->ty))
+            err_at(&e->pos, "operand must be scalar");
+        e->ty = int_ty;
+    } else if (e->kind == Expr_Cast) {
+        if (!is_scalar(e->ty) || !is_scalar(e->subs[0]->ty))
+            err_at(&e->pos, "cast requires scalar types");
+    } else if (e->kind == Expr_Mul || e->kind == Expr_Div || e->kind == Expr_Mod || e->kind == Expr_Add
+               || e->kind == Expr_Sub) {
+        if (e->kind == Expr_Add && is_integer_ty(e->subs[0]->ty) && is_ptr_ty(e->subs[1]->ty)) {
             struct expr *tmp = e->subs[0];
             e->subs[0] = e->subs[1], e->subs[1] = tmp;
         }
-        if (k == Expr_Add && is_ptr_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
+        if (e->kind == Expr_Add && is_ptr_ty(e->subs[0]->ty) && is_integer_ty(e->subs[1]->ty)) {
             e->kind = Expr_PtrAdd;
-            e->type = e->subs[0]->type;
-        } else if (k == Expr_Sub && is_ptr_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
+            e->ty = e->subs[0]->ty;
+        } else if (e->kind == Expr_Sub && is_ptr_ty(e->subs[0]->ty) && is_integer_ty(e->subs[1]->ty)) {
             e->kind = Expr_PtrSub;
-            e->type = e->subs[0]->type;
-        } else if (k == Expr_Sub && is_ptr_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            if (e->subs[0]->type != e->subs[1]->type)
-                error_at(&e->pos, "pointer types must match");
+            e->ty = e->subs[0]->ty;
+        } else if (e->kind == Expr_Sub && is_ptr_ty(e->subs[0]->ty) && is_ptr_ty(e->subs[1]->ty)) {
+            if (e->subs[0]->ty != e->subs[1]->ty)
+                err_at(&e->pos, "pointer types must match");
             e->kind = Expr_PtrDiff;
-            e->type = int_type;  // standard doesn't mandate pointer-sized ptrdiff_t, so int is sufficient
-        } else if (is_integer_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
-            apply_uac(e->subs);
-            e->type = e->subs[0]->type;
+            e->ty = int_ty;  // standard doesn't mandate pointer-sized ptrdiff_t, so int is sufficient
+        } else if (is_integer_ty(e->subs[0]->ty) && is_integer_ty(e->subs[1]->ty)) {
+            apply_ua_conv(e->subs);
+            e->ty = e->subs[0]->ty;
         } else {
-            error_at(&e->pos, "operands must have arithmetic types");
+            err_at(&e->pos, "operands must have arithmetic types");
         }
-    } else if (k == Expr_Shl || k == Expr_Shr) {
-        if (!is_integer_type(e->subs[0]->type) || !is_integer_type(e->subs[1]->type))
-            error_at(&e->pos, "operands must have integer types");
-        e->type = e->subs[0]->type;  // lhs determines type
-    } else if (k == Expr_Eq || k == Expr_Ne) {
-        apply_null_ptr_conversion(e->subs);
-        if (is_integer_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
-            apply_uac(e->subs);
-        } else if (is_ptr_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            unify_ptr_operands(e->subs);
+    } else if (e->kind == Expr_Shl || e->kind == Expr_Shr) {
+        if (!is_integer_ty(e->subs[0]->ty) || !is_integer_ty(e->subs[1]->ty))
+            err_at(&e->pos, "operands must have integer types");
+        e->ty = e->subs[0]->ty;  // lhs determines type
+    } else if (e->kind == Expr_Eq || e->kind == Expr_Ne) {
+        apply_null_ptr_conv(e->subs);
+        if (is_integer_ty(e->subs[0]->ty) && is_integer_ty(e->subs[1]->ty)) {
+            apply_ua_conv(e->subs);
+        } else if (is_ptr_ty(e->subs[0]->ty) && is_ptr_ty(e->subs[1]->ty)) {
+            unify_ptr_subs(e->subs);
         } else {
-            error_at(&e->pos, "operands of equality operators must have compatible types");
+            err_at(&e->pos, "operands of equality operators must have compatible types");
         }
-        e->type = int_type;
-    } else if (k == Expr_Lt || k == Expr_Le || k == Expr_Gt || k == Expr_Ge) {
-        if (is_integer_type(e->subs[0]->type) && is_integer_type(e->subs[1]->type)) {
-            apply_uac(e->subs);
-        } else if (is_ptr_type(e->subs[0]->type) && is_ptr_type(e->subs[1]->type)) {
-            if (!type_eq(e->subs[0]->type, e->subs[1]->type))
-                error_at(&e->pos, "pointer types must match");
+        e->ty = int_ty;
+    } else if (e->kind == Expr_Lt || e->kind == Expr_Le || e->kind == Expr_Gt || e->kind == Expr_Ge) {
+        if (is_integer_ty(e->subs[0]->ty) && is_integer_ty(e->subs[1]->ty)) {
+            apply_ua_conv(e->subs);
+        } else if (is_ptr_ty(e->subs[0]->ty) && is_ptr_ty(e->subs[1]->ty)) {
+            if (!ty_eq(e->subs[0]->ty, e->subs[1]->ty))
+                err_at(&e->pos, "pointer types must match");
         } else {
-            error_at(&e->pos, "operands must be both integers or both pointers");
+            err_at(&e->pos, "operands must be both integers or both pointers");
         }
-        e->type = int_type;
-    } else if (k == Expr_BitAnd || k == Expr_BitXor || k == Expr_BitOr) {
-        if (!is_integer_type(e->subs[0]->type) || !is_integer_type(e->subs[1]->type))
-            error_at(&e->pos, "operands must have integer types");
-        apply_uac(e->subs);
-        e->type = e->subs[0]->type;
-    } else if (k == Expr_And || k == Expr_Or) {
-        if (!is_scalar(e->subs[0]->type) || !is_scalar(e->subs[1]->type))
-            error_at(&e->pos, "operands must have scalar types");
-        e->type = int_type;
-    } else if (k == Expr_Cond) {
-        apply_null_ptr_conversion(e->subs + 1);
-        if (is_void_type(e->subs[1]->type) && is_void_type(e->subs[2]->type)) {
+        e->ty = int_ty;
+    } else if (e->kind == Expr_BitAnd || e->kind == Expr_BitXor || e->kind == Expr_BitOr) {
+        if (!is_integer_ty(e->subs[0]->ty) || !is_integer_ty(e->subs[1]->ty))
+            err_at(&e->pos, "operands must have integer types");
+        apply_ua_conv(e->subs);
+        e->ty = e->subs[0]->ty;
+    } else if (e->kind == Expr_And || e->kind == Expr_Or) {
+        if (!is_scalar(e->subs[0]->ty) || !is_scalar(e->subs[1]->ty))
+            err_at(&e->pos, "operands must have scalar types");
+        e->ty = int_ty;
+    } else if (e->kind == Expr_Cond) {
+        apply_null_ptr_conv(e->subs + 1);
+        if (is_void_ty(e->subs[1]->ty) && is_void_ty(e->subs[2]->ty)) {
             // pass
-        } else if (is_integer_type(e->subs[1]->type) && is_integer_type(e->subs[2]->type)) {
-            apply_uac(e->subs + 1);
-        } else if (is_ptr_type(e->subs[1]->type) && is_ptr_type(e->subs[2]->type)) {
-            unify_ptr_operands(e->subs + 1);
+        } else if (is_integer_ty(e->subs[1]->ty) && is_integer_ty(e->subs[2]->ty)) {
+            apply_ua_conv(e->subs + 1);
+        } else if (is_ptr_ty(e->subs[1]->ty) && is_ptr_ty(e->subs[2]->ty)) {
+            unify_ptr_subs(e->subs + 1);
         } else {
-            error_at(&e->pos, "operands of conditional operator must have compatible types");
+            err_at(&e->pos, "operands of conditional operator must have compatible types");
         }
-        e->type = e->subs[1]->type;
-    } else if (k == Expr_Assign) {
+        e->ty = e->subs[1]->ty;
+    } else if (e->kind == Expr_Assign) {
         if (!is_assignable(e->subs[0]))
-            error_at(&e->pos, "operand must be assignable");
-        e->subs[1] = apply_assignment_conversion(e->subs[1], e->subs[0]->type);
-        e->type = e->subs[0]->type;
-    } else if (k == Expr_Comma) {
-        e->type = e->subs[1]->type;
-    } else if (k == Expr_VaStart) {
-        if (!curr_func || curr_func->type->kind != Type_Func || !curr_func->type->is_va)
-            error_at(&e->pos, "va_start used outside of a variadic function");
-        if (e->subs[0]->type != va_list_type)
-            error_at(&e->pos, "va_start operand must be of type va_list");
+            err_at(&e->pos, "operand must be assignable");
+        e->subs[1] = apply_assign_conv(e->subs[1], e->subs[0]->ty);
+        e->ty = e->subs[0]->ty;
+    } else if (e->kind == Expr_Comma) {
+        e->ty = e->subs[1]->ty;
+    } else if (e->kind == Expr_VaStart) {
+        if (!curr_func || curr_func->ty->kind != Ty_Func || !curr_func->ty->is_va)
+            err_at(&e->pos, "va_start used outside of a variadic function");
+        if (e->subs[0]->ty != va_list_ty)
+            err_at(&e->pos, "va_start operand must be of type va_list");
         if (e->subs[1]->kind != Expr_Var || e->subs[1]->sym != curr_func->last_param)
-            error_at(&e->subs[1]->pos, "second operand of va_start must be a parameter name");
-        e->type = void_type;
-    } else if (k == Expr_VaEnd) {
-        if (e->subs[0]->type != va_list_type)
-            error_at(&e->pos, "va_end operand must be of type va_list");
-        e->type = void_type;
-    } else if (k == Expr_VaArg) {
-        if (e->subs[0]->type != va_list_type)
-            error_at(&e->pos, "va_arg first operand must be of type va_list");
-        if (!is_scalar(e->type))
-            error_at(&e->pos, "va_arg second operand must have scalar type");
+            err_at(&e->subs[1]->pos, "second operand of va_start must be a parameter name");
+        e->ty = void_ty;
+    } else if (e->kind == Expr_VaEnd) {
+        if (e->subs[0]->ty != va_list_ty)
+            err_at(&e->pos, "va_end operand must be of type va_list");
+        e->ty = void_ty;
+    } else if (e->kind == Expr_VaArg) {
+        if (e->subs[0]->ty != va_list_ty)
+            err_at(&e->pos, "va_arg first operand must be of type va_list");
+        if (!is_scalar(e->ty))
+            err_at(&e->pos, "va_arg second operand must have scalar type");
     } else {
-        die("elab_expr: unreachable: %d", k);
+        die("elab_expr: unreachable: %d", e->kind);
     }
     return e;
 }
 
-static struct expr *elab_rvalue_expr(struct expr *expr) {
-    return ptr_decay(elab_expr(expr));
+static struct expr *elab_rvalue_expr(struct expr *e) {
+    return ptr_decay(elab_expr(e));
 }
 
-static struct expr *elab_expr_expect(struct expr *expr, struct type *expected) {
-    return apply_assignment_conversion(elab_rvalue_expr(expr), expected);
+static struct expr *elab_expr_expect(struct expr *e, struct ty *expected) {
+    return apply_assign_conv(elab_rvalue_expr(e), expected);
 }
 
-static struct expr *elab_cond_expr(struct expr *expr) {
-    expr = elab_rvalue_expr(expr);
-    if (!is_scalar(expr->type))
-        error_at(&expr->pos, "condition must have scalar type");
-    return expr;
+static struct expr *elab_cond_expr(struct expr *e) {
+    e = elab_rvalue_expr(e);
+    if (!is_scalar(e->ty))
+        err_at(&e->pos, "condition must have scalar type");
+    return e;
 }
 
-static int elab_init(struct expr *expr, struct type *target_type) {
-    expr = elab_rvalue_expr(expr);
-    if (is_ptr_type(target_type) && is_null_ptr(expr)) {
+static int elab_init(struct expr *e, struct ty *target_ty) {
+    e = elab_rvalue_expr(e);
+    if (is_ptr_ty(target_ty) && is_null_ptr(e)) {
         return 0;
-    } else if (is_integer_type(target_type) && is_integer_type(expr->type)) {
-        return const_cast(eval(expr), target_type);
+    } else if (is_integer_ty(target_ty) && is_integer_ty(e->ty)) {
+        return const_cast(eval(e), target_ty);
     } else {
-        error_at(&expr->pos, "target type mismatch");
+        err_at(&e->pos, "target type mismatch");
     }
 }
 
@@ -1017,11 +1016,11 @@ static void lex() {
                 if (chr == delim)
                     break;
                 if (chr == EOF)
-                    error_at(&chr_pos, "unterminated string/char literal");
+                    err_at(&chr_pos, "unterminated string/char literal");
                 if (delim == '\'' && len != 0)
-                    error_at(&chr_pos, "too many characters in char literal");
+                    err_at(&chr_pos, "too many characters in char literal");
                 if (len == MAX_TOK_LEN)
-                    error_at(&chr_pos, "string/char literal too long");
+                    err_at(&chr_pos, "string/char literal too long");
                 int decoded = chr;
                 if (chr == '\\') {
                     next_chr();
@@ -1034,7 +1033,7 @@ static void lex() {
                 tok_val.str[len++] = decoded;
             }
             if (delim == '\'' && len == 0)
-                error_at(&chr_pos, "empty char literal");
+                err_at(&chr_pos, "empty char literal");
             next_chr();
             tok_val.str[len] = 0;
             tok_val.n = len;
@@ -1080,12 +1079,12 @@ static int eat(const char *t) {
 
 static void expect(const char *t) {
     if (!eat(t))
-        error_at(&tok_pos, "expected '%s'", t);
+        err_at(&tok_pos, "expected '%s'", t);
 }
 
 static const char *p_ident() {
     if (tok != Tok_Wrd)
-        error_at(&tok_pos, "expected identifier");
+        err_at(&tok_pos, "expected identifier");
     struct string *res = intern(tok_str, tok_len);
     lex();
     return res->chars;
@@ -1099,23 +1098,23 @@ enum {
     Decl_Local,
     Decl_Param,
     Decl_Struct,
-    Decl_TypeName,
+    Decl_TyName,
 };
 
 static void p_decl(int scope, void *ctx);
 
-static int at_type() {
+static int at_ty() {
     return at("void") || at("char") || at("int") || at("va_list") || at("struct") || at("enum") || at("const");
 }
 
 static int at_decl() {
-    return at("static") || at("extern") || at_type();
+    return at("static") || at("extern") || at_ty();
 }
 
-static struct type *p_typename() {
-    struct type *type;
-    p_decl(Decl_TypeName, &type);
-    return type;
+static struct ty *p_tyname() {
+    struct ty *ty;
+    p_decl(Decl_TyName, &ty);
+    return ty;
 }
 
 enum {
@@ -1144,144 +1143,144 @@ static struct expr *p_expr(int rbp) {
     struct expr *acc;
     if (eat("(")) {
         if (at_decl()) {
-            struct type *type = p_typename();
+            struct ty *ty = p_tyname();
             expect(")");
             struct expr *tmp = p_expr(Prec_Unary);
-            acc = new_unary_expr(&pos, Expr_Cast, tmp);
-            acc->type = type;
+            acc = mk_unary_expr(&pos, Expr_Cast, tmp);
+            acc->ty = ty;
         } else {
             acc = p_expr(0);
             expect(")");
         }
     } else if (eat("-")) {
-        acc = new_unary_expr(&pos, Expr_Neg, p_expr(Prec_Unary));
+        acc = mk_unary_expr(&pos, Expr_Neg, p_expr(Prec_Unary));
     } else if (eat("~")) {
-        acc = new_unary_expr(&pos, Expr_BitNot, p_expr(Prec_Unary));
+        acc = mk_unary_expr(&pos, Expr_BitNot, p_expr(Prec_Unary));
     } else if (eat("!")) {
-        acc = new_unary_expr(&pos, Expr_Not, p_expr(Prec_Unary));
+        acc = mk_unary_expr(&pos, Expr_Not, p_expr(Prec_Unary));
     } else if (tok == Tok_Num) {
-        acc = new_expr(&pos, Expr_Num, 0);
+        acc = mk_expr(&pos, Expr_Num, 0);
         acc->int_val = tok_val.n;
         lex();
     } else if (tok == Tok_Str) {
-        acc = new_expr(&pos, Expr_Str, 0);
+        acc = mk_expr(&pos, Expr_Str, 0);
         acc->str_val = intern(tok_val.str, tok_val.n);
         lex();
     } else if (tok == Tok_Chr) {
-        acc = new_expr(&pos, Expr_Chr, 0);
+        acc = mk_expr(&pos, Expr_Chr, 0);
         acc->int_val = tok_val.str[0];
         lex();
     } else if (eat("&")) {
-        acc = new_unary_expr(&pos, Expr_Addr, p_expr(Prec_Unary));
+        acc = mk_unary_expr(&pos, Expr_Addr, p_expr(Prec_Unary));
     } else if (eat("*")) {
-        acc = new_unary_expr(&pos, Expr_Deref, p_expr(Prec_Unary));
+        acc = mk_unary_expr(&pos, Expr_Deref, p_expr(Prec_Unary));
     } else if (eat("sizeof")) {
         expect("(");
-        struct type *type = p_typename();
+        struct ty *ty = p_tyname();
         expect(")");
-        if (!is_object_type(type))
-            error_at(&pos, "sizeof operand must have object type");
-        acc = new_expr(&pos, Expr_Num, 0);
-        acc->int_val = type_size(type);
+        if (!is_object_ty(ty))
+            err_at(&pos, "sizeof operand must have object type");
+        acc = mk_expr(&pos, Expr_Num, 0);
+        acc->int_val = ty_size(ty);
     } else if (eat("va_start")) {
-        acc = new_expr(&pos, Expr_VaStart, 2);
+        acc = mk_expr(&pos, Expr_VaStart, 2);
         expect("(");
         acc->subs[0] = p_expr(Prec_Comma);
         expect(",");
         acc->subs[1] = p_expr(Prec_Comma);
         expect(")");
     } else if (eat("va_arg")) {
-        acc = new_expr(&pos, Expr_VaArg, 1);
+        acc = mk_expr(&pos, Expr_VaArg, 1);
         expect("(");
         acc->subs[0] = p_expr(Prec_Comma);
         expect(",");
-        acc->type = p_typename();
+        acc->ty = p_tyname();
         expect(")");
     } else if (eat("va_end")) {
-        acc = new_expr(&pos, Expr_VaEnd, 1);
+        acc = mk_expr(&pos, Expr_VaEnd, 1);
         expect("(");
         acc->subs[0] = p_expr(Prec_Comma);
         expect(")");
     } else if (tok == Tok_Wrd) {
         struct sym *sym = lookup(0, p_ident());
         if (!sym)
-            error_at(&pos, "undefined symbol");
+            err_at(&pos, "undefined symbol");
         if (sym->kind == Sym_Const) {
-            acc = new_expr(&pos, Expr_Num, 0);
+            acc = mk_expr(&pos, Expr_Num, 0);
             acc->int_val = sym->val;
         } else if (sym->kind == Sym_Local || sym->kind == Sym_Global) {
-            acc = new_expr(&pos, Expr_Var, 0);
+            acc = mk_expr(&pos, Expr_Var, 0);
             acc->sym = sym;
         } else if (sym->kind == Sym_Func) {
-            acc = new_expr(&pos, Expr_Func, 0);
+            acc = mk_expr(&pos, Expr_Func, 0);
             acc->sym = sym;
         } else {
-            error_at(&pos, "symbol is not a variable, function, or constant");
+            err_at(&pos, "symbol is not a variable, function, or constant");
         }
     } else {
-        error_at(&pos, "expected expression");
+        err_at(&pos, "expected expression");
     }
 
     // led
     while (1) {
         if (rbp < Prec_Comma && eat(",")) {
-            acc = new_bin_expr(Expr_Comma, acc, p_expr(0));
+            acc = mk_bin_expr(Expr_Comma, acc, p_expr(0));
         } else if (rbp < Prec_Assign && eat("=")) {
-            acc = new_bin_expr(Expr_Assign, acc, p_expr(Prec_Assign - 1));
+            acc = mk_bin_expr(Expr_Assign, acc, p_expr(Prec_Assign - 1));
         } else if (rbp < Prec_Cond && eat("?")) {
-            struct expr *tmp = new_expr(&pos, Expr_Cond, 3);
+            struct expr *tmp = mk_expr(&pos, Expr_Cond, 3);
             tmp->subs[0] = acc;
             tmp->subs[1] = p_expr(0);
             expect(":");
             tmp->subs[2] = p_expr(Prec_Cond - 1);
             acc = tmp;
         } else if (rbp < Prec_Or && eat("||")) {
-            acc = new_bin_expr(Expr_Or, acc, p_expr(Prec_Or));
+            acc = mk_bin_expr(Expr_Or, acc, p_expr(Prec_Or));
         } else if (rbp < Prec_And && eat("&&")) {
-            acc = new_bin_expr(Expr_And, acc, p_expr(Prec_And));
+            acc = mk_bin_expr(Expr_And, acc, p_expr(Prec_And));
         } else if (rbp < Prec_BitOr && eat("|")) {
-            acc = new_bin_expr(Expr_BitOr, acc, p_expr(Prec_BitOr));
+            acc = mk_bin_expr(Expr_BitOr, acc, p_expr(Prec_BitOr));
         } else if (rbp < Prec_BitXor && eat("^")) {
-            acc = new_bin_expr(Expr_BitXor, acc, p_expr(Prec_BitXor));
+            acc = mk_bin_expr(Expr_BitXor, acc, p_expr(Prec_BitXor));
         } else if (rbp < Prec_BitAnd && eat("&")) {
-            acc = new_bin_expr(Expr_BitAnd, acc, p_expr(Prec_BitAnd));
+            acc = mk_bin_expr(Expr_BitAnd, acc, p_expr(Prec_BitAnd));
         } else if (rbp < Prec_Eq && eat("==")) {
-            acc = new_bin_expr(Expr_Eq, acc, p_expr(Prec_Eq));
+            acc = mk_bin_expr(Expr_Eq, acc, p_expr(Prec_Eq));
         } else if (rbp < Prec_Eq && eat("!=")) {
-            acc = new_bin_expr(Expr_Ne, acc, p_expr(Prec_Eq));
+            acc = mk_bin_expr(Expr_Ne, acc, p_expr(Prec_Eq));
         } else if (rbp < Prec_Rel && eat("<")) {
-            acc = new_bin_expr(Expr_Lt, acc, p_expr(Prec_Rel));
+            acc = mk_bin_expr(Expr_Lt, acc, p_expr(Prec_Rel));
         } else if (rbp < Prec_Rel && eat(">")) {
-            acc = new_bin_expr(Expr_Gt, acc, p_expr(Prec_Rel));
+            acc = mk_bin_expr(Expr_Gt, acc, p_expr(Prec_Rel));
         } else if (rbp < Prec_Rel && eat("<=")) {
-            acc = new_bin_expr(Expr_Le, acc, p_expr(Prec_Rel));
+            acc = mk_bin_expr(Expr_Le, acc, p_expr(Prec_Rel));
         } else if (rbp < Prec_Rel && eat(">=")) {
-            acc = new_bin_expr(Expr_Ge, acc, p_expr(Prec_Rel));
+            acc = mk_bin_expr(Expr_Ge, acc, p_expr(Prec_Rel));
         } else if (rbp < Prec_Shift && eat("<<")) {
-            acc = new_bin_expr(Expr_Shl, acc, p_expr(Prec_Shift));
+            acc = mk_bin_expr(Expr_Shl, acc, p_expr(Prec_Shift));
         } else if (rbp < Prec_Shift && eat(">>")) {
-            acc = new_bin_expr(Expr_Shr, acc, p_expr(Prec_Shift));
+            acc = mk_bin_expr(Expr_Shr, acc, p_expr(Prec_Shift));
         } else if (rbp < Prec_Add && eat("+")) {
-            acc = new_bin_expr(Expr_Add, acc, p_expr(Prec_Add));
+            acc = mk_bin_expr(Expr_Add, acc, p_expr(Prec_Add));
         } else if (rbp < Prec_Add && eat("-")) {
-            acc = new_bin_expr(Expr_Sub, acc, p_expr(Prec_Add));
+            acc = mk_bin_expr(Expr_Sub, acc, p_expr(Prec_Add));
         } else if (rbp < Prec_Mul && eat("*")) {
-            acc = new_bin_expr(Expr_Mul, acc, p_expr(Prec_Mul));
+            acc = mk_bin_expr(Expr_Mul, acc, p_expr(Prec_Mul));
         } else if (rbp < Prec_Mul && eat("/")) {
-            acc = new_bin_expr(Expr_Div, acc, p_expr(Prec_Mul));
+            acc = mk_bin_expr(Expr_Div, acc, p_expr(Prec_Mul));
         } else if (rbp < Prec_Mul && eat("%")) {
-            acc = new_bin_expr(Expr_Mod, acc, p_expr(Prec_Mul));
+            acc = mk_bin_expr(Expr_Mod, acc, p_expr(Prec_Mul));
         } else if (rbp < Prec_Postfix && eat("[")) {
-            acc = new_unary_expr(&pos, Expr_Deref, new_bin_expr(Expr_Add, acc, p_expr(0)));
+            acc = mk_unary_expr(&pos, Expr_Deref, mk_bin_expr(Expr_Add, acc, p_expr(0)));
             expect("]");
         } else if (rbp < Prec_Postfix && eat("(")) {
-            struct expr *tmp = new_expr(&pos, Expr_Call, MAX_FUNC_PARAMS + 1);
+            struct expr *tmp = mk_expr(&pos, Expr_Call, MAX_FUNC_PARAMS + 1);
             tmp->subs[0] = acc;
             int n_args = 0;
             struct expr **args = &tmp->subs[1];
             while (!eat(")")) {
                 if (n_args >= MAX_FUNC_PARAMS)
-                    error_at(&pos, "too many arguments in function call");
+                    err_at(&pos, "too many arguments in function call");
                 if (n_args > 0) {
                     expect(",");
                 }
@@ -1290,15 +1289,15 @@ static struct expr *p_expr(int rbp) {
             tmp->n_subs = n_args + 1;
             acc = tmp;
         } else if (rbp < Prec_Postfix && eat(".")) {
-            acc = new_unary_expr(&pos, Expr_Member, acc);
-            acc->field_name = p_ident();
+            acc = mk_unary_expr(&pos, Expr_Member, acc);
+            acc->fld_name = p_ident();
         } else if (rbp < Prec_Postfix && eat("->")) {
-            acc = new_unary_expr(&pos, Expr_Member, new_unary_expr(&pos, Expr_Deref, acc));
-            acc->field_name = p_ident();
+            acc = mk_unary_expr(&pos, Expr_Member, mk_unary_expr(&pos, Expr_Deref, acc));
+            acc->fld_name = p_ident();
         } else if (rbp < Prec_Postfix && eat("++")) {
-            acc = new_unary_expr(&pos, Expr_PostInc, acc);
+            acc = mk_unary_expr(&pos, Expr_PostInc, acc);
         } else if (rbp < Prec_Postfix && eat("--")) {
-            acc = new_unary_expr(&pos, Expr_PostDec, acc);
+            acc = mk_unary_expr(&pos, Expr_PostDec, acc);
         } else {
             return acc;
         }
@@ -1313,20 +1312,20 @@ static struct stmt *p_stmt() {
     struct pos pos = tok_pos;
     struct stmt *stmt;
     if (eat("{")) {
-        stmt = new_stmt(&pos, Stmt_Block);
+        stmt = mk_stmt(&pos, Stmt_Block);
         push_scope();
         for (struct stmt **lastp = &stmt->sub; !eat("}"); lastp = &(*lastp)->next) {
             *lastp = p_stmt();
         }
         pop_scope();
     } else if (eat("return")) {
-        stmt = new_stmt(&pos, Stmt_Return);
-        if (!is_void_type(curr_func->type->ret_type)) {
-            stmt->expr = elab_expr_expect(p_expr(0), curr_func->type->ret_type);
+        stmt = mk_stmt(&pos, Stmt_Return);
+        if (!is_void_ty(curr_func->ty->ret_ty)) {
+            stmt->expr = elab_expr_expect(p_expr(0), curr_func->ty->ret_ty);
         }
         expect(";");
     } else if (eat("if")) {
-        stmt = new_stmt(&pos, Stmt_If);
+        stmt = mk_stmt(&pos, Stmt_If);
 
         expect("(");
         stmt->expr = elab_cond_expr(p_expr(0));
@@ -1344,23 +1343,23 @@ static struct stmt *p_stmt() {
 
     } else if (at("for") || at("while")) {
         struct stmt *outer_loop = curr_loop;
-        curr_loop = stmt = new_stmt(&pos, Stmt_Loop);
-        
+        curr_loop = stmt = mk_stmt(&pos, Stmt_Loop);
+
         int is_while = eat("while") || !eat("for");
 
         push_scope();
         expect("(");
         if (is_while) {
             stmt->expr = elab_cond_expr(p_expr(0));
-            stmt->sub = new_stmt(&pos, Stmt_Empty);
-            stmt->sub->next = new_stmt(&pos, Stmt_Empty);
+            stmt->sub = mk_stmt(&pos, Stmt_Empty);
+            stmt->sub->next = mk_stmt(&pos, Stmt_Empty);
         } else {
             if (eat(";")) {
-                stmt->sub = new_stmt(&pos, Stmt_Empty);
+                stmt->sub = mk_stmt(&pos, Stmt_Empty);
             } else if (at_decl()) {
                 stmt->sub = p_stmt();
             } else {
-                stmt->sub = new_stmt(&pos, Stmt_Expr);
+                stmt->sub = mk_stmt(&pos, Stmt_Expr);
                 stmt->sub->expr = elab_rvalue_expr(p_expr(0));
                 expect(";");
             }
@@ -1371,10 +1370,10 @@ static struct stmt *p_stmt() {
             expect(";");
 
             if (!at(")")) {
-                stmt->sub->next = new_stmt(&pos, Stmt_Expr);
+                stmt->sub->next = mk_stmt(&pos, Stmt_Expr);
                 stmt->sub->next->expr = elab_rvalue_expr(p_expr(0));
             } else {
-                stmt->sub->next = new_stmt(&pos, Stmt_Empty);
+                stmt->sub->next = mk_stmt(&pos, Stmt_Empty);
             }
         }
         expect(")");
@@ -1386,29 +1385,29 @@ static struct stmt *p_stmt() {
         curr_loop = outer_loop;
     } else if (at("break") || at("continue")) {
         if (!curr_loop)
-            error_at(&pos, "break/continue statement outside loop");
+            err_at(&pos, "break/continue statement outside loop");
         int kind = eat("break") || !eat("continue") ? Stmt_Break : Stmt_Continue;
-        stmt = new_stmt(&pos, kind);
+        stmt = mk_stmt(&pos, kind);
         stmt->sub = curr_loop;
         expect(";");
     } else if (eat(";")) {
-        stmt = new_stmt(&pos, Stmt_Empty);
+        stmt = mk_stmt(&pos, Stmt_Empty);
     } else if (at_decl()) {
         stmt = 0;
         p_decl(Decl_Local, &stmt);
-        stmt = stmt ? stmt : new_stmt(&pos, Stmt_Empty);
+        stmt = stmt ? stmt : mk_stmt(&pos, Stmt_Empty);
     } else {
-        stmt = new_stmt(&pos, Stmt_Expr);
+        stmt = mk_stmt(&pos, Stmt_Expr);
         stmt->expr = elab_rvalue_expr(p_expr(0));
         expect(";");
     }
     return stmt;
 }
 
-static struct type *p_struct() {
+static struct ty *p_struct() {
     struct pos name_pos = tok_pos;
     const char *name = tok == Tok_Wrd ? p_ident() : 0;
-    
+
     int is_def = at("{");
     struct sym *sym = is_def ? 0 : lookup(1, name);
 
@@ -1426,12 +1425,12 @@ static struct type *p_struct() {
     }
 
     if (!name && !is_def)
-        error_at(&name_pos, "declaration of anonymous struct must be a definition");
+        err_at(&name_pos, "declaration of anonymous struct must be a definition");
 
-    return sym->type;
+    return sym->ty;
 }
 
-static struct type *p_enum() {
+static struct ty *p_enum() {
     expect("{");
     for (int val = 0; !eat("}"); val++) {
         struct pos name_pos = tok_pos;
@@ -1442,54 +1441,54 @@ static struct type *p_enum() {
         if (!at("}")) {
             expect(",");
         }
-        declare(&name_pos, 0, Sym_Const, 0, name, int_type, 1)->val = val;
+        declare(&name_pos, 0, Sym_Const, 0, name, int_ty, 1)->val = val;
     }
-    return int_type;
+    return int_ty;
 }
 
-static struct type *p_decl_array(struct type *base_type) {
+static struct ty *p_decl_arr(struct ty *base_ty) {
     int len = p_const_expr();
     expect("]");
     if (eat("[")) {
-        base_type = p_decl_array(base_type);
+        base_ty = p_decl_arr(base_ty);
     }
-    return new_array_type(base_type, len);
+    return mk_arr_ty(base_ty, len);
 }
 
 static void p_decl(int scope, void *ctx) {
     struct pos pos = tok_pos;
-    int storage_class = 0;
-    struct type *base_type = 0;
+    int storage = 0;
+    struct ty *base_ty = 0;
     while (1) {
         if (eat("const")) {
             // ignored
-        } else if (!storage_class && eat("static")) {
-            storage_class = Static;
-        } else if (!storage_class && eat("extern")) {
-            storage_class = Extern;
-        } else if (!base_type && eat("void")) {
-            base_type = void_type;
-        } else if (!base_type && eat("int")) {
-            base_type = int_type;
-        } else if (!base_type && eat("char")) {
-            base_type = char_type;
-        } else if (!base_type && eat("va_list")) {
-            base_type = va_list_type;
-        } else if (!base_type && eat("struct")) {
-            base_type = p_struct();
-        } else if (!base_type && eat("enum")) {
-            base_type = p_enum();
+        } else if (!storage && eat("static")) {
+            storage = Static;
+        } else if (!storage && eat("extern")) {
+            storage = Extern;
+        } else if (!base_ty && eat("void")) {
+            base_ty = void_ty;
+        } else if (!base_ty && eat("int")) {
+            base_ty = int_ty;
+        } else if (!base_ty && eat("char")) {
+            base_ty = char_ty;
+        } else if (!base_ty && eat("va_list")) {
+            base_ty = va_list_ty;
+        } else if (!base_ty && eat("struct")) {
+            base_ty = p_struct();
+        } else if (!base_ty && eat("enum")) {
+            base_ty = p_enum();
         } else {
             break;
         }
     }
-    if (!base_type)
-        error_at(&pos, "expected type specifier");
-    if (storage_class && scope != Decl_Global)
-        error_at(&pos, "storage class specifier is not allowed here");
+    if (!base_ty)
+        err_at(&pos, "expected type specifier");
+    if (storage && scope != Decl_Global)
+        err_at(&pos, "storage class specifier is not allowed here");
 
     for (int n_declarators = 0;; n_declarators++) {
-        struct type *type = base_type;
+        struct ty *ty = base_ty;
         const char *name = 0;
         int has_params = 0;
         struct sym *params[MAX_FUNC_PARAMS];
@@ -1497,23 +1496,23 @@ static void p_decl(int scope, void *ctx) {
         struct expr *init = 0;
 
         while (eat("*")) {
-            type = new_ptr_type(type);
+            ty = mk_ptr_ty(ty);
         }
 
         struct pos name_pos = tok_pos;
-        if (scope != Decl_TypeName && tok == Tok_Wrd) {
+        if (scope != Decl_TyName && tok == Tok_Wrd) {
             name = p_ident();
         }
 
         // simplified grammar: either a function, array or object definition
         if (eat("(")) {
-            struct type *param_types[MAX_FUNC_PARAMS];
+            struct ty *param_tys[MAX_FUNC_PARAMS];
             has_params = 1;
             int is_va = 0;
             push_scope();
             for (n_params = 0; !at(")"); n_params++) {
                 if (n_params >= MAX_FUNC_PARAMS)
-                    error_at(&name_pos, "too many parameters in function declaration");
+                    err_at(&name_pos, "too many parameters in function declaration");
                 if (n_params > 0) {
                     expect(",");
                     if (eat("...")) {
@@ -1522,46 +1521,46 @@ static void p_decl(int scope, void *ctx) {
                     }
                 }
                 p_decl(Decl_Param, &params[n_params]);
-                param_types[n_params] = params[n_params]->type;
+                param_tys[n_params] = params[n_params]->ty;
             }
             expect(")");
-            if (!is_scalar(type) && !is_void_type(type))
-                error_at(&name_pos, "bad function return type");
-            type = new_func_type(type, param_types, n_params, is_va);
+            if (!is_scalar(ty) && !is_void_ty(ty))
+                err_at(&name_pos, "bad function return type");
+            ty = mk_func_ty(ty, param_tys, n_params, is_va);
             pop_scope();
         } else if (eat("[")) {
-            type = p_decl_array(type);
+            ty = p_decl_arr(ty);
         } else if (eat("=") && (scope == Decl_Global || scope == Decl_Local)) {
             init = p_expr(Prec_Comma);
         }
 
-        if (scope == Decl_TypeName) {
-            *(struct type **)ctx = type;
+        if (scope == Decl_TyName) {
+            *(struct ty **)ctx = ty;
             return;  // max one type per abstract declaration
         } else if (scope == Decl_Param) {
-            if (is_array_type(type)) {
-                type = new_ptr_type(type->ptr_to);
-            } else if (is_func_type(type)) {
-                type = new_ptr_type(type);
+            if (is_arr_ty(ty)) {
+                ty = mk_ptr_ty(ty->ptr_to);
+            } else if (is_func_ty(ty)) {
+                ty = mk_ptr_ty(ty);
             }
 
-            if (!is_scalar(type))
-                error_at(&name_pos, "bad parameter type");
-            *(struct sym **)ctx = declare(&name_pos, 0, Sym_Local, 0, name, type, 1);
+            if (!is_scalar(ty))
+                err_at(&name_pos, "bad parameter type");
+            *(struct sym **)ctx = declare(&name_pos, 0, Sym_Local, 0, name, ty, 1);
             return;  // max one parameter per declaration
         } else if (!name) {
             // declaration does not declare a function or object
         } else if (has_params) {
             // function declaration
             if (scope != Decl_Global && scope != Decl_Local)
-                error_at(&name_pos, "function declaration is not allowed here");
+                err_at(&name_pos, "function declaration is not allowed here");
             int has_func_body = scope == Decl_Global && n_declarators == 0 && at("{");
-            struct sym *sym = declare(&name_pos, 0, Sym_Func, storage_class, name, type, has_func_body);
+            struct sym *sym = declare(&name_pos, 0, Sym_Func, storage, name, ty, has_func_body);
             if (has_func_body) {
                 sym->scope = push_scope();
                 for (int i = 0; i < n_params; i++) {
                     struct sym *param =
-                        declare(&params[i]->last_pos, sym, Sym_Local, 0, params[i]->name, params[i]->type, 1);
+                        declare(&params[i]->last_pos, sym, Sym_Local, 0, params[i]->name, params[i]->ty, 1);
                     sym->last_param = param;
                 }
                 curr_func = sym;
@@ -1572,23 +1571,23 @@ static void p_decl(int scope, void *ctx) {
             }
         } else {
             // object declaration
-            if (!is_object_type(type))
-                error_at(&name_pos, "bad object type");
+            if (!is_object_ty(ty))
+                err_at(&name_pos, "bad object type");
             if (scope == Decl_Local) {
-                struct stmt *decl = new_stmt(&pos, Stmt_Decl);
-                decl->sym = declare(&name_pos, curr_func, Sym_Local, 0, name, type, 1);
+                struct stmt *decl = mk_stmt(&pos, Stmt_Decl);
+                decl->sym = declare(&name_pos, curr_func, Sym_Local, 0, name, ty, 1);
                 decl->sub = *(struct stmt **)ctx;
                 *(struct stmt **)ctx = decl;
                 if (init) {
-                    decl->expr = elab_expr_expect(init, type);
+                    decl->expr = elab_expr_expect(init, ty);
                 }
             } else if (scope == Decl_Global) {
-                struct sym *sym = declare(&name_pos, 0, Sym_Global, storage_class, name, type, !!init);
+                struct sym *sym = declare(&name_pos, 0, Sym_Global, storage, name, ty, !!init);
                 if (init) {
-                    sym->val = elab_init(init, type);
+                    sym->val = elab_init(init, ty);
                 }
             } else if (scope == Decl_Struct) {
-                declare(&name_pos, (struct sym *)ctx, Sym_Field, 0, name, type, 1);
+                declare(&name_pos, (struct sym *)ctx, Sym_Field, 0, name, ty, 1);
             } else {
                 die("p_decl (object declaration): unreachable: %d", scope);
             }
@@ -1606,26 +1605,26 @@ static void p_decl(int scope, void *ctx) {
 
 static int next_loop_id, next_cond_id, next_str_id;
 
-static const char *get_str_op(struct type *type) {
-    if (type->kind == Type_Char)
+static const char *get_str_op(struct ty *ty) {
+    if (ty->kind == Ty_Char)
         return "strb w";
-    else if (type->kind == Type_Int)
+    else if (ty->kind == Ty_Int)
         return "str w";
-    else if (type->kind == Type_Ptr)
+    else if (ty->kind == Ty_Ptr)
         return "str x";
     else
-        die("get_str_op: unreachable: %d", type->kind);
+        die("get_str_op: unreachable: %d", ty->kind);
 }
 
-static const char *get_ldr_op(struct type *type) {
-    if (type->kind == Type_Char)
+static const char *get_ldr_op(struct ty *ty) {
+    if (ty->kind == Ty_Char)
         return "ldrsb x";
-    else if (type->kind == Type_Int)
+    else if (ty->kind == Ty_Int)
         return "ldrsw x";
-    else if (type->kind == Type_Ptr)
+    else if (ty->kind == Ty_Ptr)
         return "ldr x";
     else
-        die("get_ldr_op: unreachable: %d", type->kind);
+        die("get_ldr_op: unreachable: %d", ty->kind);
 }
 
 static void emit_str_load(struct string *str) {
@@ -1639,20 +1638,20 @@ static void emit_str_load(struct string *str) {
 
 static void emit_int_load(int val, int reg) {
     int chunk_mask = (1 << 16) - 1;
-    int default_chunk_value = val < 0 ? chunk_mask : 0;
+    int default_chunk = val < 0 ? chunk_mask : 0;
     for (int i = 0; i < 4; i++, val = val >> 16) {
         int chunk = val & chunk_mask;
         if (i == 0) {
             chunk = val < 0 ? chunk | ~chunk_mask : chunk;
             writef(1, "mov x%d, #%d // %d\n", reg, chunk, val);
-        } else if (chunk != default_chunk_value) {
+        } else if (chunk != default_chunk) {
             writef(1, "movk x%d, #%d, lsl #%d\n", reg, chunk, i * 16);
         }
     }
 }
 
 static void emit_slot_addr(struct sym *local, int reg) {
-    emit_int_load(-local->offset, 9);
+    emit_int_load(-local->offs, 9);
     writef(1, "sub x%d, x29, x9\n", reg);
 }
 
@@ -1664,72 +1663,72 @@ static void emit_pop(int reg) {
     writef(1, "ldr x%d, [sp], #16\n", reg);
 }
 
-static void emit_load(struct type *type, int dst, int src) {
-    writef(1, "%s%d, [x%d]\n", get_ldr_op(type), dst, src);
+static void emit_load(struct ty *ty, int dst, int src) {
+    writef(1, "%s%d, [x%d]\n", get_ldr_op(ty), dst, src);
 }
 
-static void emit_store(struct type *type, int src, int dst) {
-    writef(1, "%s%d, [x%d]\n", get_str_op(type), src, dst);
+static void emit_store(struct ty *ty, int src, int dst) {
+    writef(1, "%s%d, [x%d]\n", get_str_op(ty), src, dst);
 }
 
-static void emit_sext(struct type *type, int reg) {
-    if (type->kind == Type_Char) {
+static void emit_sext(struct ty *ty, int reg) {
+    if (ty->kind == Ty_Char) {
         writef(1, "sxtb x%d, w%d\n", reg, reg);
-    } else if (type->kind == Type_Int) {
+    } else if (ty->kind == Ty_Int) {
         writef(1, "sxtw x%d, w%d\n", reg, reg);
     }
 }
 
-static void emit_scalar_expr(struct expr *expr);
-static void emit_place_expr(struct expr *expr);
+static void emit_scalar_expr(struct expr *e);
+static void emit_place_expr(struct expr *e);
 
-static void emit_binary_operands(struct expr *expr) {
-    emit_scalar_expr(expr->subs[0]);
+static void emit_bin_subs(struct expr *e) {
+    emit_scalar_expr(e->subs[0]);
     emit_push(0);
-    emit_scalar_expr(expr->subs[1]);
+    emit_scalar_expr(e->subs[1]);
     write_str(1, "mov x1, x0\n");
     emit_pop(0);
 }
 
-static void emit_short_circuit_expr(struct expr *expr, const char *cond) {
+static void emit_short_circuit_expr(struct expr *e, const char *cond) {
     int cond_id = next_cond_id++;
-    emit_scalar_expr(expr->subs[0]);
+    emit_scalar_expr(e->subs[0]);
     writef(1, "cb%s x0, .L.cond.%d.short\n", cond, cond_id);
-    emit_scalar_expr(expr->subs[1]);
+    emit_scalar_expr(e->subs[1]);
     writef(1, ".L.cond.%d.short:\n", cond_id);
     write_str(1, "cmp x0, #0\n");
     write_str(1, "cset x0, ne\n");
 }
 
-static void emit_cmp_expr(struct expr *expr, const char *cond, const char *ucond) {
-    emit_binary_operands(expr);
+static void emit_cmp_expr(struct expr *e, const char *cond, const char *ucond) {
+    emit_bin_subs(e);
     write_str(1, "cmp x0, x1\n");
-    if (is_ptr_type(expr->subs[0]->type)) {
+    if (is_ptr_ty(e->subs[0]->ty)) {
         writef(1, "cset x0, %s\n", ucond);
     } else {
         writef(1, "cset x0, %s\n", cond);
     }
 }
 
-static void emit_arithmetic_expr(struct expr *expr, const char *op) {
-    emit_binary_operands(expr);
+static void emit_arith_expr(struct expr *e, const char *op) {
+    emit_bin_subs(e);
     writef(1, "%s x0, x0, x1\n", op);
 }
 
-static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
-    assert("emit_assign_to_addr", is_object_type(dst_type));
-    if (is_scalar(dst_type)) {
+static void emit_assign_to_addr(struct ty *dst_ty, struct expr *rhs) {
+    assert("emit_assign_to_addr", is_object_ty(dst_ty));
+    if (is_scalar(dst_ty)) {
         emit_push(0);
         emit_scalar_expr(rhs);
         write_str(1, "mov x1, x0\n");
         emit_pop(0);
-        emit_store(dst_type, 1, 0);
+        emit_store(dst_ty, 1, 0);
         write_str(1, "mov x0, x1\n");
     } else {
         emit_push(0);
         if (rhs->kind == Expr_Assign) {
             emit_place_expr(rhs->subs[0]);
-            emit_assign_to_addr(rhs->type, rhs->subs[1]);
+            emit_assign_to_addr(rhs->ty, rhs->subs[1]);
         } else {
             if (!is_addressable(rhs))
                 die("emit_assign_to_addr: unreachable: %d", rhs->kind);
@@ -1737,46 +1736,46 @@ static void emit_assign_to_addr(struct type *dst_type, struct expr *rhs) {
         }
         write_str(1, "mov x1, x0\n");
         emit_pop(0);
-        emit_int_load(type_size(dst_type), 2);
+        emit_int_load(ty_size(dst_ty), 2);
         write_str(1, "bl _memcpy\n");
     }
 }
 
-static void emit_effect_expr(struct expr *expr) {
-    if (expr->kind == Expr_Assign) {
-        emit_place_expr(expr->subs[0]);
-        emit_assign_to_addr(expr->type, expr->subs[1]);
-    } else if (expr->kind == Expr_Comma) {
-        emit_effect_expr(expr->subs[0]);
-        emit_effect_expr(expr->subs[1]);
-    } else if (expr->kind == Expr_VaStart) {
-        emit_place_expr(expr->subs[0]);
+static void emit_effect_expr(struct expr *e) {
+    if (e->kind == Expr_Assign) {
+        emit_place_expr(e->subs[0]);
+        emit_assign_to_addr(e->ty, e->subs[1]);
+    } else if (e->kind == Expr_Comma) {
+        emit_effect_expr(e->subs[0]);
+        emit_effect_expr(e->subs[1]);
+    } else if (e->kind == Expr_VaStart) {
+        emit_place_expr(e->subs[0]);
         write_str(1, "add x1, x29, #16  // top of frame\n");
         write_str(1, "str x1, [x0]  // stack\n");
-        emit_int_load(-curr_func->va_area_offset - curr_func->va_area_size, 1);
+        emit_int_load(-curr_func->va_offs - curr_func->va_size, 1);
         writef(1, "sub x%d, x29, x%d\n", 1, 1);
         write_str(1, "str x1, [x0, #8]  // gr_top\n");
         write_str(1, "str xzr, [x0, #16]  // vr_top\n");
-        writef(1, "mov x1, #%d\n", -curr_func->va_area_size);
+        writef(1, "mov x1, #%d\n", -curr_func->va_size);
         write_str(1, "str w1, [x0, #24]  // gr_offs\n");
         write_str(1, "str wzr, [x0, #28]  // vr_offs\n");
-    } else if (expr->kind == Expr_VaEnd) {
+    } else if (e->kind == Expr_VaEnd) {
         // no-op
-    } else if (is_scalar(expr->type) || is_void_type(expr->type)) {
-        emit_scalar_expr(expr);
-    } else if (is_lvalue(expr)) {
-        emit_place_expr(expr);
+    } else if (is_scalar(e->ty) || is_void_ty(e->ty)) {
+        emit_scalar_expr(e);
+    } else if (is_lvalue(e)) {
+        emit_place_expr(e);
     } else {
-        die("emit_effect_expr: unreachable: %d", expr->kind);
+        die("emit_effect_expr: unreachable: %d", e->kind);
     }
 }
 
-static void emit_place_expr(struct expr *expr) {
-    int k = expr->kind;
+static void emit_place_expr(struct expr *e) {
+    int k = e->kind;
     if (k == Expr_Var || k == Expr_Func) {
-        struct sym *sym = expr->sym;
+        struct sym *sym = e->sym;
         if (sym->kind == Sym_Global || sym->kind == Sym_Func) {
-            if (sym->storage_class == Extern && !sym->is_defined) {
+            if (sym->storage == Extern && !sym->is_defined) {
                 writef(1, "adrp x0, :got:%s\n", sym->name);
                 writef(1, "ldr x0, [x0, :got_lo12:%s]\n", sym->name);
             } else {
@@ -1789,128 +1788,127 @@ static void emit_place_expr(struct expr *expr) {
             die("emit_place_expr: unreachable: %d (ident)", sym->kind);
         }
     } else if (k == Expr_Member) {
-        emit_place_expr(expr->subs[0]);
-        emit_int_load(expr->sym->offset, 1);
+        emit_place_expr(e->subs[0]);
+        emit_int_load(e->sym->offs, 1);
         write_str(1, "add x0, x0, x1\n");
     } else if (k == Expr_Deref) {
-        emit_scalar_expr(expr->subs[0]);
+        emit_scalar_expr(e->subs[0]);
     } else if (k == Expr_Str) {
-        emit_str_load(expr->str_val);
+        emit_str_load(e->str_val);
     } else {
         die("emit_place_expr: unreachable: %d", k);
     }
 }
 
-static void emit_scalar_expr(struct expr *expr) {
-    int k = expr->kind;
-    if (is_lvalue(expr)) {
-        emit_place_expr(expr);
-        emit_load(expr->type, 0, 0);
-    } else if (k == Expr_Num) {
-        emit_int_load(expr->int_val, 0);
-    } else if (k == Expr_Str) {
-        emit_str_load(expr->str_val);
-    } else if (k == Expr_PostDec || k == Expr_PostInc) {
-        const char *op = k == Expr_PostInc ? "add" : "sub";
-        int step = is_ptr_type(expr->type) ? type_size(expr->type->ptr_to) : 1;
-        emit_place_expr(expr->subs[0]);
+static void emit_scalar_expr(struct expr *e) {
+    if (is_lvalue(e)) {
+        emit_place_expr(e);
+        emit_load(e->ty, 0, 0);
+    } else if (e->kind == Expr_Num) {
+        emit_int_load(e->int_val, 0);
+    } else if (e->kind == Expr_Str) {
+        emit_str_load(e->str_val);
+    } else if (e->kind == Expr_PostDec || e->kind == Expr_PostInc) {
+        const char *op = e->kind == Expr_PostInc ? "add" : "sub";
+        int step = is_ptr_ty(e->ty) ? ty_size(e->ty->ptr_to) : 1;
+        emit_place_expr(e->subs[0]);
         write_str(1, "mov x2, x0\n");
-        emit_load(expr->type, 0, 0);
+        emit_load(e->ty, 0, 0);
         emit_int_load(step, 1);
         writef(1, "%s x1, x0, x1\n", op);
-        emit_store(expr->type, 1, 2);
-    } else if (k == Expr_Deref) {
-        emit_scalar_expr(expr->subs[0]);
-        emit_load(expr->type, 0, 0);
-    } else if (k == Expr_Addr) {
-        emit_place_expr(expr->subs[0]);
-    } else if (k == Expr_BitNot) {
-        emit_scalar_expr(expr->subs[0]);
+        emit_store(e->ty, 1, 2);
+    } else if (e->kind == Expr_Deref) {
+        emit_scalar_expr(e->subs[0]);
+        emit_load(e->ty, 0, 0);
+    } else if (e->kind == Expr_Addr) {
+        emit_place_expr(e->subs[0]);
+    } else if (e->kind == Expr_BitNot) {
+        emit_scalar_expr(e->subs[0]);
         write_str(1, "mvn x0, x0\n");
-    } else if (k == Expr_Not) {
-        emit_scalar_expr(expr->subs[0]);
+    } else if (e->kind == Expr_Not) {
+        emit_scalar_expr(e->subs[0]);
         write_str(1, "cmp x0, #0\n");
         write_str(1, "cset x0, eq\n");
-    } else if (k == Expr_Neg) {
-        emit_scalar_expr(expr->subs[0]);
+    } else if (e->kind == Expr_Neg) {
+        emit_scalar_expr(e->subs[0]);
         write_str(1, "neg x0, x0\n");
-    } else if (k == Expr_Cast) {
+    } else if (e->kind == Expr_Cast) {
         // values in registers are always full width, so
         // narrowing casts can simply truncate the value.
-        emit_scalar_expr(expr->subs[0]);
-        if (type_size(expr->type) < 8) {
-            emit_sext(expr->type, 0);
+        emit_scalar_expr(e->subs[0]);
+        if (ty_size(e->ty) < 8) {
+            emit_sext(e->ty, 0);
         }
-    } else if (k == Expr_Mod) {
-        emit_binary_operands(expr);
+    } else if (e->kind == Expr_Mod) {
+        emit_bin_subs(e);
         write_str(1, "sdiv x3, x0, x1\n");
         write_str(1, "msub x0, x3, x1, x0\n");
-    } else if (k == Expr_Div) {
-        emit_arithmetic_expr(expr, "sdiv");
-    } else if (k == Expr_Mul) {
-        emit_arithmetic_expr(expr, "mul");
-    } else if (k == Expr_Sub) {
-        emit_arithmetic_expr(expr, "sub");
-    } else if (k == Expr_Add) {
-        emit_arithmetic_expr(expr, "add");
-    } else if (k == Expr_Shr) {
-        emit_arithmetic_expr(expr, "asr");
-    } else if (k == Expr_Shl) {
-        emit_arithmetic_expr(expr, "lsl");
-    } else if (k == Expr_Ge) {
-        emit_cmp_expr(expr, "ge", "hs");
-    } else if (k == Expr_Gt) {
-        emit_cmp_expr(expr, "gt", "hi");
-    } else if (k == Expr_Le) {
-        emit_cmp_expr(expr, "le", "ls");
-    } else if (k == Expr_Lt) {
-        emit_cmp_expr(expr, "lt", "lo");
-    } else if (k == Expr_Ne) {
-        emit_cmp_expr(expr, "ne", "ne");
-    } else if (k == Expr_Eq) {
-        emit_cmp_expr(expr, "eq", "eq");
-    } else if (k == Expr_BitAnd) {
-        emit_arithmetic_expr(expr, "and");
-    } else if (k == Expr_BitXor) {
-        emit_arithmetic_expr(expr, "eor");
-    } else if (k == Expr_BitOr) {
-        emit_arithmetic_expr(expr, "orr");
-    } else if (k == Expr_And) {
-        emit_short_circuit_expr(expr, "z");
-    } else if (k == Expr_Or) {
-        emit_short_circuit_expr(expr, "nz");
-    } else if (k == Expr_PtrAdd || k == Expr_PtrSub) {
-        emit_binary_operands(expr);
-        int size = type_size(expr->subs[0]->type->ptr_to);
-        const char *op = k == Expr_PtrAdd ? "add" : "sub";
+    } else if (e->kind == Expr_Div) {
+        emit_arith_expr(e, "sdiv");
+    } else if (e->kind == Expr_Mul) {
+        emit_arith_expr(e, "mul");
+    } else if (e->kind == Expr_Sub) {
+        emit_arith_expr(e, "sub");
+    } else if (e->kind == Expr_Add) {
+        emit_arith_expr(e, "add");
+    } else if (e->kind == Expr_Shr) {
+        emit_arith_expr(e, "asr");
+    } else if (e->kind == Expr_Shl) {
+        emit_arith_expr(e, "lsl");
+    } else if (e->kind == Expr_Ge) {
+        emit_cmp_expr(e, "ge", "hs");
+    } else if (e->kind == Expr_Gt) {
+        emit_cmp_expr(e, "gt", "hi");
+    } else if (e->kind == Expr_Le) {
+        emit_cmp_expr(e, "le", "ls");
+    } else if (e->kind == Expr_Lt) {
+        emit_cmp_expr(e, "lt", "lo");
+    } else if (e->kind == Expr_Ne) {
+        emit_cmp_expr(e, "ne", "ne");
+    } else if (e->kind == Expr_Eq) {
+        emit_cmp_expr(e, "eq", "eq");
+    } else if (e->kind == Expr_BitAnd) {
+        emit_arith_expr(e, "and");
+    } else if (e->kind == Expr_BitXor) {
+        emit_arith_expr(e, "eor");
+    } else if (e->kind == Expr_BitOr) {
+        emit_arith_expr(e, "orr");
+    } else if (e->kind == Expr_And) {
+        emit_short_circuit_expr(e, "z");
+    } else if (e->kind == Expr_Or) {
+        emit_short_circuit_expr(e, "nz");
+    } else if (e->kind == Expr_PtrAdd || e->kind == Expr_PtrSub) {
+        emit_bin_subs(e);
+        int size = ty_size(e->subs[0]->ty->ptr_to);
+        const char *op = e->kind == Expr_PtrAdd ? "add" : "sub";
         if (size != 1) {
             emit_int_load(size, 2);
             write_str(1, "mul x1, x1, x2\n");
         }
         writef(1, "%s x0, x0, x1\n", op);
-    } else if (k == Expr_PtrDiff) {
-        emit_binary_operands(expr);
-        int size = type_size(expr->subs[0]->type->ptr_to);
+    } else if (e->kind == Expr_PtrDiff) {
+        emit_bin_subs(e);
+        int size = ty_size(e->subs[0]->ty->ptr_to);
         write_str(1, "sub x0, x0, x1\n");
         if (size != 1) {
             emit_int_load(size, 1);
             write_str(1, "sdiv x0, x0, x1\n");
         }
-    } else if (k == Expr_Cond) {
+    } else if (e->kind == Expr_Cond) {
         int cond_id = next_cond_id++;
-        emit_scalar_expr(expr->subs[0]);
+        emit_scalar_expr(e->subs[0]);
         writef(1, "cbz x0, .L.cond.%d.else\n", cond_id);
-        emit_scalar_expr(expr->subs[1]);
+        emit_scalar_expr(e->subs[1]);
         writef(1, "b .L.cond.%d.end\n", cond_id);
         writef(1, ".L.cond.%d.else:\n", cond_id);
-        emit_scalar_expr(expr->subs[2]);
+        emit_scalar_expr(e->subs[2]);
         writef(1, ".L.cond.%d.end:\n", cond_id);
-    } else if (k == Expr_Assign) {
-        emit_place_expr(expr->subs[0]);
-        emit_assign_to_addr(expr->type, expr->subs[1]);
-    } else if (k == Expr_Call) {
-        struct expr *fn = expr->subs[0], **args = &expr->subs[1];
-        int argc = expr->n_subs - 1;
+    } else if (e->kind == Expr_Assign) {
+        emit_place_expr(e->subs[0]);
+        emit_assign_to_addr(e->ty, e->subs[1]);
+    } else if (e->kind == Expr_Call) {
+        struct expr *fn = e->subs[0], **args = &e->subs[1];
+        int argc = e->n_subs - 1;
 
         assert("emit_scalar_expr: func", fn->kind == Expr_Addr && fn->subs[0]->kind == Expr_Func);
 
@@ -1924,17 +1922,17 @@ static void emit_scalar_expr(struct expr *expr) {
         writef(1, "bl %s\n", fn->subs[0]->sym->name);
         // Normalize the result by sign-extending in case this
         // is a foreign function returning its result in w0.
-        if (is_scalar(expr->type) && type_size(expr->type) < 8) {
-            emit_sext(expr->type, 0);
+        if (is_scalar(e->ty) && ty_size(e->ty) < 8) {
+            emit_sext(e->ty, 0);
         }
-    } else if (k == Expr_Comma) {
-        emit_effect_expr(expr->subs[0]);
-        emit_scalar_expr(expr->subs[1]);
-    } else if (k == Expr_VaArg) {
-        emit_place_expr(expr->subs[0]);
+    } else if (e->kind == Expr_Comma) {
+        emit_effect_expr(e->subs[0]);
+        emit_scalar_expr(e->subs[1]);
+    } else if (e->kind == Expr_VaArg) {
+        emit_place_expr(e->subs[0]);
         write_str(1, "bl _va_arg\n");
     } else {
-        die("emit_scalar_expr: unreachable: %d", k);
+        die("emit_scalar_expr: unreachable: %d", e->kind);
     }
 }
 
@@ -1944,7 +1942,7 @@ static void emit_init_decls(struct stmt *stmt) {
     emit_init_decls(stmt->sub);
     if (stmt->expr) {
         emit_slot_addr(stmt->sym, 0);
-        emit_assign_to_addr(stmt->sym->type, stmt->expr);
+        emit_assign_to_addr(stmt->sym->ty, stmt->expr);
     }
 }
 
@@ -2002,13 +2000,13 @@ static void emit_stmt(struct stmt *stmt) {
 
 static void emit_func(struct sym *func) {
     curr_func = func;
-    int n_va_args = func->type->is_va ? 8 - func->type->n_params : 0;
-    func->va_area_offset = -align_up(curr_func->size + n_va_args * 8, 8);
-    func->va_area_size = n_va_args * 8;
-    curr_func->size = align_up(-func->va_area_offset, 16);
+    int n_va_args = func->ty->is_va ? 8 - func->ty->n_params : 0;
+    func->va_offs = -align_up(curr_func->size + n_va_args * 8, 8);
+    func->va_size = n_va_args * 8;
+    curr_func->size = align_up(-func->va_offs, 16);
 
     write_str(1, ".section .text\n");
-    if (func->storage_class != Static) {
+    if (func->storage != Static) {
         writef(1, ".globl %s\n", func->name);
     }
     writef(1, "%s:\n", func->name);
@@ -2017,13 +2015,13 @@ static void emit_func(struct sym *func) {
     write_str(1, "mov x29, sp\n");
     writef(1, "sub sp, sp, #%d\n", curr_func->size);
     struct sym *sym = func->scope->head;
-    for (int i = 0; i < func->type->n_params; i++, sym = sym->next) {
-        emit_int_load(sym->offset, 9);
-        writef(1, "%s%d, [x29, x9]\n", get_str_op(sym->type), i);
+    for (int i = 0; i < func->ty->n_params; i++, sym = sym->next) {
+        emit_int_load(sym->offs, 9);
+        writef(1, "%s%d, [x29, x9]\n", get_str_op(sym->ty), i);
     }
-    for (int i = func->type->n_params; i < 8 && func->type->is_va; i++) {
-        int offset = func->va_area_offset + (i - func->type->n_params) * 8;
-        emit_int_load(offset, 9);
+    for (int i = func->ty->n_params; i < 8 && func->ty->is_va; i++) {
+        int offs = func->va_offs + (i - func->ty->n_params) * 8;
+        emit_int_load(offs, 9);
         writef(1, "str x%d, [x29, x9]\n", i);
     }
     // body
@@ -2037,20 +2035,20 @@ static void emit_func(struct sym *func) {
 }
 
 static void emit_obj(struct sym *sym) {
-    int size = type_size(sym->type), align = type_align(sym->type);
-    
-    if (is_scalar(sym->type) && sym->is_defined) {
+    int size = ty_size(sym->ty), align = ty_align(sym->ty);
+
+    if (is_scalar(sym->ty) && sym->is_defined) {
         write_str(1, ".section .data\n");
     } else {
         write_str(1, ".section .bss\n");
     }
-    if (sym->storage_class != Static) {
+    if (sym->storage != Static) {
         writef(1, ".globl %s\n", sym->name);
     }
     writef(1, ".balign %d\n", align);
     writef(1, "%s:\n", sym->name);
-    
-    if (is_scalar(sym->type)) {
+
+    if (is_scalar(sym->ty)) {
         if (size == 1) {
             writef(1, ".byte %d\n", sym->val);
         } else if (size == 4) {
@@ -2065,7 +2063,7 @@ static void emit_obj(struct sym *sym) {
     }
 }
 
-static void emit_runtime_helpers() {
+static void emit_rt_helpers() {
     write_str(1, ".section .text\n");
 
     // void *_memcpy(void *d, const void *s, int n)
@@ -2121,7 +2119,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    init_types();
+    init_tys();
 
     // lexer
     chr_pos.file = file_name;
@@ -2139,20 +2137,20 @@ int main(int argc, char **argv) {
 
     for (struct sym *sym = curr_scope->head; sym; sym = sym->next) {
         if (sym->kind == Sym_Func) {
-            if (sym->storage_class != Static && !sym->is_defined)
+            if (sym->storage != Static && !sym->is_defined)
                 continue;  // declaration, external linkage
-            if (sym->storage_class == Static && !sym->is_defined)
+            if (sym->storage == Static && !sym->is_defined)
                 continue;  // declaration with internal linkage, missing definition
             emit_func(sym);
         } else if (sym->kind == Sym_Global) {
-            if (sym->storage_class == Extern && !sym->is_defined)
+            if (sym->storage == Extern && !sym->is_defined)
                 continue;  // declaration, external linkage
             if (!sym->is_defined)
                 ;  // tentative definition
             emit_obj(sym);
         }
     }
-    emit_runtime_helpers();
+    emit_rt_helpers();
     emit_str_literals();
 
     return 0;
