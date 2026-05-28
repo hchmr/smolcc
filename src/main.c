@@ -946,19 +946,9 @@ enum { MAX_TOK_LEN = 255 };
 
 static int inp;
 
-enum { Rdbuf_Cap = 256 };
-static char rdbuf[Rdbuf_Cap];
+enum { RDBUF_CAP = 256 };
+static char rdbuf[RDBUF_CAP];
 static int rdbuf_len, rdbuf_pos;
-
-static int peek_char(int fd) {
-    if (rdbuf_pos < rdbuf_len)
-        return rdbuf[rdbuf_pos];
-    rdbuf_pos = 0, rdbuf_len = read(fd, rdbuf, Rdbuf_Cap);
-    if (rdbuf_len <= 0)
-        return EOF;
-    return rdbuf[rdbuf_pos];
-}
-
 static struct pos chr_pos;
 static int chr;
 
@@ -971,6 +961,13 @@ static struct {
     char str[MAX_TOK_LEN + 1];
 } tok_val;
 
+static int peek_char() {
+    if (rdbuf_pos < rdbuf_len)
+        return rdbuf[rdbuf_pos];
+    rdbuf_pos = 0, rdbuf_len = read(inp, rdbuf, RDBUF_CAP);
+    return (rdbuf_len <= 0) ? EOF : rdbuf[rdbuf_pos];
+}
+
 static void next_chr() {
     if (chr == '\n') {
         chr_pos.line++, chr_pos.col = 1;
@@ -980,7 +977,7 @@ static void next_chr() {
     if (tok_len < MAX_TOK_LEN) {
         tok_str[tok_len++] = chr;
     }
-    if (chr = peek_char(inp), chr == EOF)
+    if (chr = peek_char(), chr == EOF)
         return;
     rdbuf_pos++;
 }
@@ -1036,23 +1033,20 @@ static void lex() {
             tok_val.n = len;
             tok = delim == '"' ? Tok_Str : Tok_Chr;
         } else {
-            tok = Tok_Sym;
-            int prev_chr = chr;
+            int prev = chr;
             next_chr();
-            if (prev_chr == '#' || prev_chr == '/' && chr == '/') {
+            if (prev == '#' || prev == '/' && chr == '/') {
                 while (chr != '\n' && chr != EOF) {
                     next_chr();
                 }
                 continue;
-            } else if (find_chr("<>!=", prev_chr) && chr == '=') {
+            } else if (find_chr("<>!=", prev) && chr == '=' || find_chr("&|<>+-", prev) && chr == prev
+                       || prev == '-' && chr == '>') {
                 next_chr();
-            } else if (find_chr("&|<>+-", prev_chr) && chr == prev_chr) {
-                next_chr();
-            } else if (prev_chr == '-' && chr == '>') {
-                next_chr();
-            } else if (prev_chr == '.' && chr == '.' && peek_char(inp) == '.') {
+            } else if (prev == '.' && chr == '.' && peek_char() == '.') {
                 next_chr(), next_chr();
             }
+            tok = Tok_Sym;
         }
         break;
     }
