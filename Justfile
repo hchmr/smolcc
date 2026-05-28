@@ -12,7 +12,7 @@ self-test:
     make && ./out/smolcc main.c | ./scripts/asm-fmt
 
 format:
-    clang-format -i *.c
+    find . -name '*.c' | xargs clang-format -i
     ./scripts/asm-fmt -i *.s
 
 configure-clangd:

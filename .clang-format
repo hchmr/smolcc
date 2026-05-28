@@ -12,5 +12,6 @@ AllowShortLoopsOnASingleLine: false
 
 BreakBeforeBinaryOperators: NonAssignment
 BreakBeforeBraces: Attach
+BreakStringLiterals: false
 
 CommentPragmas: '^#'

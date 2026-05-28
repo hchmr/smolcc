@@ -14,18 +14,6 @@ extern void abort();
 
 enum { EOF = -1 };
 
-static char rdbuf[2];
-static int rdbuf_len, rdbuf_pos;
-
-static int peek_char(int fd) {
-    if (rdbuf_pos < rdbuf_len)
-        return rdbuf[rdbuf_pos];
-    rdbuf_pos = 0, rdbuf_len = read(fd, rdbuf, 2);
-    if (rdbuf_len <= 0)
-        return EOF;
-    return rdbuf[rdbuf_pos];
-}
-
 static void write_str(int fd, const char *s) {
     const char *p = s;
     while (*p++)
@@ -85,8 +73,6 @@ static void writef(int fd, const char *fmt, ...) {
 //= misc
 
 static int str_eq(const char *a, const char *b) {
-    if (a == b)
-        return 1;
     while (*a && *b)
         if (*a++ != *b++)
             return 0;
@@ -962,6 +948,19 @@ enum { MAX_TOK_LEN = 255 };
 
 static int inp;
 
+enum { Rdbuf_Cap = 256 };
+static char rdbuf[Rdbuf_Cap];
+static int rdbuf_len, rdbuf_pos;
+
+static int peek_char(int fd) {
+    if (rdbuf_pos < rdbuf_len)
+        return rdbuf[rdbuf_pos];
+    rdbuf_pos = 0, rdbuf_len = read(fd, rdbuf, Rdbuf_Cap);
+    if (rdbuf_len <= 0)
+        return EOF;
+    return rdbuf[rdbuf_pos];
+}
+
 static struct pos chr_pos;
 static int chr;
 
@@ -1651,8 +1650,8 @@ static void emit_int_load(int val, int reg) {
 }
 
 static void emit_slot_addr(struct sym *local, int reg) {
-    emit_int_load(-local->offs, 9);
-    writef(1, "sub x%d, x29, x9\n", reg);
+    emit_int_load(local->offs, 9);
+    writef(1, "add x%d, x29, x9\n", reg);
 }
 
 static void emit_push(int reg) {
@@ -1679,22 +1678,22 @@ static void emit_sext(struct ty *ty, int reg) {
     }
 }
 
-static void emit_scalar_expr(struct expr *e);
+static void emit_expr(struct expr *e);
 static void emit_place_expr(struct expr *e);
 
 static void emit_bin_subs(struct expr *e) {
-    emit_scalar_expr(e->subs[0]);
+    emit_expr(e->subs[0]);
     emit_push(0);
-    emit_scalar_expr(e->subs[1]);
+    emit_expr(e->subs[1]);
     write_str(1, "mov x1, x0\n");
     emit_pop(0);
 }
 
 static void emit_short_circuit_expr(struct expr *e, const char *cond) {
     int cond_id = next_cond_id++;
-    emit_scalar_expr(e->subs[0]);
+    emit_expr(e->subs[0]);
     writef(1, "cb%s x0, .L.cond.%d.short\n", cond, cond_id);
-    emit_scalar_expr(e->subs[1]);
+    emit_expr(e->subs[1]);
     writef(1, ".L.cond.%d.short:\n", cond_id);
     write_str(1, "cmp x0, #0\n");
     write_str(1, "cset x0, ne\n");
@@ -1719,7 +1718,7 @@ static void emit_assign_to_addr(struct ty *dst_ty, struct expr *rhs) {
     assert("emit_assign_to_addr", is_object_ty(dst_ty));
     if (is_scalar(dst_ty)) {
         emit_push(0);
-        emit_scalar_expr(rhs);
+        emit_expr(rhs);
         write_str(1, "mov x1, x0\n");
         emit_pop(0);
         emit_store(dst_ty, 1, 0);
@@ -1738,35 +1737,6 @@ static void emit_assign_to_addr(struct ty *dst_ty, struct expr *rhs) {
         emit_pop(0);
         emit_int_load(ty_size(dst_ty), 2);
         write_str(1, "bl _memcpy\n");
-    }
-}
-
-static void emit_effect_expr(struct expr *e) {
-    if (e->kind == Expr_Assign) {
-        emit_place_expr(e->subs[0]);
-        emit_assign_to_addr(e->ty, e->subs[1]);
-    } else if (e->kind == Expr_Comma) {
-        emit_effect_expr(e->subs[0]);
-        emit_effect_expr(e->subs[1]);
-    } else if (e->kind == Expr_VaStart) {
-        emit_place_expr(e->subs[0]);
-        write_str(1, "add x1, x29, #16  // top of frame\n");
-        write_str(1, "str x1, [x0]  // stack\n");
-        emit_int_load(-curr_func->va_offs - curr_func->va_size, 1);
-        writef(1, "sub x%d, x29, x%d\n", 1, 1);
-        write_str(1, "str x1, [x0, #8]  // gr_top\n");
-        write_str(1, "str xzr, [x0, #16]  // vr_top\n");
-        writef(1, "mov x1, #%d\n", -curr_func->va_size);
-        write_str(1, "str w1, [x0, #24]  // gr_offs\n");
-        write_str(1, "str wzr, [x0, #28]  // vr_offs\n");
-    } else if (e->kind == Expr_VaEnd) {
-        // no-op
-    } else if (is_scalar(e->ty) || is_void_ty(e->ty)) {
-        emit_scalar_expr(e);
-    } else if (is_lvalue(e)) {
-        emit_place_expr(e);
-    } else {
-        die("emit_effect_expr: unreachable: %d", e->kind);
     }
 }
 
@@ -1792,7 +1762,7 @@ static void emit_place_expr(struct expr *e) {
         emit_int_load(e->sym->offs, 1);
         write_str(1, "add x0, x0, x1\n");
     } else if (k == Expr_Deref) {
-        emit_scalar_expr(e->subs[0]);
+        emit_expr(e->subs[0]);
     } else if (k == Expr_Str) {
         emit_str_load(e->str_val);
     } else {
@@ -1800,10 +1770,12 @@ static void emit_place_expr(struct expr *e) {
     }
 }
 
-static void emit_scalar_expr(struct expr *e) {
+static void emit_expr(struct expr *e) {
     if (is_lvalue(e)) {
         emit_place_expr(e);
-        emit_load(e->ty, 0, 0);
+        if (is_scalar(e->ty)) {
+            emit_load(e->ty, 0, 0);
+        }
     } else if (e->kind == Expr_Num) {
         emit_int_load(e->int_val, 0);
     } else if (e->kind == Expr_Str) {
@@ -1817,25 +1789,22 @@ static void emit_scalar_expr(struct expr *e) {
         emit_int_load(step, 1);
         writef(1, "%s x1, x0, x1\n", op);
         emit_store(e->ty, 1, 2);
-    } else if (e->kind == Expr_Deref) {
-        emit_scalar_expr(e->subs[0]);
-        emit_load(e->ty, 0, 0);
     } else if (e->kind == Expr_Addr) {
         emit_place_expr(e->subs[0]);
     } else if (e->kind == Expr_BitNot) {
-        emit_scalar_expr(e->subs[0]);
+        emit_expr(e->subs[0]);
         write_str(1, "mvn x0, x0\n");
     } else if (e->kind == Expr_Not) {
-        emit_scalar_expr(e->subs[0]);
+        emit_expr(e->subs[0]);
         write_str(1, "cmp x0, #0\n");
         write_str(1, "cset x0, eq\n");
     } else if (e->kind == Expr_Neg) {
-        emit_scalar_expr(e->subs[0]);
+        emit_expr(e->subs[0]);
         write_str(1, "neg x0, x0\n");
     } else if (e->kind == Expr_Cast) {
         // values in registers are always full width, so
         // narrowing casts can simply truncate the value.
-        emit_scalar_expr(e->subs[0]);
+        emit_expr(e->subs[0]);
         if (ty_size(e->ty) < 8) {
             emit_sext(e->ty, 0);
         }
@@ -1896,12 +1865,12 @@ static void emit_scalar_expr(struct expr *e) {
         }
     } else if (e->kind == Expr_Cond) {
         int cond_id = next_cond_id++;
-        emit_scalar_expr(e->subs[0]);
+        emit_expr(e->subs[0]);
         writef(1, "cbz x0, .L.cond.%d.else\n", cond_id);
-        emit_scalar_expr(e->subs[1]);
+        emit_expr(e->subs[1]);
         writef(1, "b .L.cond.%d.end\n", cond_id);
         writef(1, ".L.cond.%d.else:\n", cond_id);
-        emit_scalar_expr(e->subs[2]);
+        emit_expr(e->subs[2]);
         writef(1, ".L.cond.%d.end:\n", cond_id);
     } else if (e->kind == Expr_Assign) {
         emit_place_expr(e->subs[0]);
@@ -1913,7 +1882,7 @@ static void emit_scalar_expr(struct expr *e) {
         assert("emit_scalar_expr: func", fn->kind == Expr_Addr && fn->subs[0]->kind == Expr_Func);
 
         for (int i = 0; i < argc; i++) {
-            emit_scalar_expr(args[i]);
+            emit_expr(args[i]);
             emit_push(0);
         }
         for (int i = argc; i-- > 0;) {
@@ -1926,8 +1895,21 @@ static void emit_scalar_expr(struct expr *e) {
             emit_sext(e->ty, 0);
         }
     } else if (e->kind == Expr_Comma) {
-        emit_effect_expr(e->subs[0]);
-        emit_scalar_expr(e->subs[1]);
+        emit_expr(e->subs[0]);
+        emit_expr(e->subs[1]);
+    } else if (e->kind == Expr_VaStart) {
+        emit_place_expr(e->subs[0]);
+        write_str(1, "add x1, x29, #16  // top of frame\n");
+        write_str(1, "str x1, [x0]  // stack\n");
+        emit_int_load(-curr_func->va_offs - curr_func->va_size, 1);
+        writef(1, "sub x%d, x29, x%d\n", 1, 1);
+        write_str(1, "str x1, [x0, #8]  // gr_top\n");
+        write_str(1, "str xzr, [x0, #16]  // vr_top\n");
+        writef(1, "mov x1, #%d\n", -curr_func->va_size);
+        write_str(1, "str w1, [x0, #24]  // gr_offs\n");
+        write_str(1, "str wzr, [x0, #28]  // vr_offs\n");
+    } else if (e->kind == Expr_VaEnd) {
+        // no-op
     } else if (e->kind == Expr_VaArg) {
         emit_place_expr(e->subs[0]);
         write_str(1, "bl _va_arg\n");
@@ -1955,12 +1937,12 @@ static void emit_stmt(struct stmt *stmt) {
         }
     } else if (k == Stmt_Return) {
         if (stmt->expr) {
-            emit_scalar_expr(stmt->expr);
+            emit_expr(stmt->expr);
         }
         writef(1, "b .L.return.%s\n", curr_func->name);
     } else if (k == Stmt_If) {
         int cond_id = next_cond_id++;
-        emit_scalar_expr(stmt->expr);
+        emit_expr(stmt->expr);
         writef(1, "cbz x0, .L.if.%d.else\n", cond_id);
         emit_stmt(stmt->sub);
         writef(1, "b .L.if.%d.end\n", cond_id);
@@ -1979,7 +1961,7 @@ static void emit_stmt(struct stmt *stmt) {
         emit_stmt(stmt->sub->next);
         writef(1, ".L.loop.%d.cond:\n", stmt->loop_id);
         if (stmt->expr) {
-            emit_scalar_expr(stmt->expr);
+            emit_expr(stmt->expr);
             writef(1, "cbnz x0, .L.loop.%d.body\n", stmt->loop_id);
         } else {
             writef(1, "b .L.loop.%d.body\n", stmt->loop_id);
@@ -1992,7 +1974,7 @@ static void emit_stmt(struct stmt *stmt) {
     } else if (k == Stmt_Decl) {
         emit_init_decls(stmt);
     } else if (k == Stmt_Expr) {
-        emit_effect_expr(stmt->expr);
+        emit_expr(stmt->expr);
     } else if (k != Stmt_Empty) {
         die("emit_stmt: unreachable: %d", k);
     }
