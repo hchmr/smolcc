@@ -498,8 +498,6 @@ enum {
     Expr_Ne,
     Expr_Lt,
     Expr_Le,
-    Expr_Gt,
-    Expr_Ge,
     Expr_Shl,
     Expr_Shr,
     Expr_Add,
@@ -846,7 +844,7 @@ static struct expr *elab_expr(struct expr *e) {
             err_at(&e->pos, "operands must have compatible types");
         }
         e->ty = int_ty;
-    } else if (e->kind == Expr_Lt || e->kind == Expr_Le || e->kind == Expr_Gt || e->kind == Expr_Ge) {
+    } else if (e->kind == Expr_Lt || e->kind == Expr_Le) {
         if (is_integer_ty(e->subs[0]->ty) && is_integer_ty(e->subs[1]->ty)) {
             apply_ua_conv(e->subs);
         } else if (is_ptr_ty(e->subs[0]->ty) && is_ptr_ty(e->subs[1]->ty)) {
@@ -1250,11 +1248,11 @@ static struct expr *p_expr(int rbp) {
         } else if (rbp < Prec_Rel && eat("<")) {
             acc = mk_bin_expr(Expr_Lt, acc, p_expr(Prec_Rel));
         } else if (rbp < Prec_Rel && eat(">")) {
-            acc = mk_bin_expr(Expr_Gt, acc, p_expr(Prec_Rel));
+            acc = mk_bin_expr(Expr_Lt, p_expr(Prec_Rel), acc);
         } else if (rbp < Prec_Rel && eat("<=")) {
             acc = mk_bin_expr(Expr_Le, acc, p_expr(Prec_Rel));
         } else if (rbp < Prec_Rel && eat(">=")) {
-            acc = mk_bin_expr(Expr_Ge, acc, p_expr(Prec_Rel));
+            acc = mk_bin_expr(Expr_Le, p_expr(Prec_Rel), acc);
         } else if (rbp < Prec_Shift && eat("<<")) {
             acc = mk_bin_expr(Expr_Shl, acc, p_expr(Prec_Shift));
         } else if (rbp < Prec_Shift && eat(">>")) {
@@ -1824,10 +1822,6 @@ static void emit_expr(struct expr *e) {
         emit_arith_expr(e, "asr");
     } else if (e->kind == Expr_Shl) {
         emit_arith_expr(e, "lsl");
-    } else if (e->kind == Expr_Ge) {
-        emit_cmp_expr(e, "ge", "hs");
-    } else if (e->kind == Expr_Gt) {
-        emit_cmp_expr(e, "gt", "hi");
     } else if (e->kind == Expr_Le) {
         emit_cmp_expr(e, "le", "ls");
     } else if (e->kind == Expr_Lt) {
