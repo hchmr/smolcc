@@ -1,4 +1,4 @@
-OUT_DIR = out
+OUT_DIR = out/0
 SMOLCC = $(OUT_DIR)/smolcc
 SRCS = main.c
 ASMS = sys.s

@@ -2,7 +2,7 @@ test *args:
     ./scripts/test {{args}}
     ./scripts/bootstrap
 
-build:
+stage0:
     make
 
 bootstrap:

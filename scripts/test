@@ -108,14 +108,13 @@ def default_exit_for(path: Path) -> int:
 
 
 def run_command(
-    path: Path, mode: str, args: list[str], env: dict[str, str]
+    path: Path, mode: str, args: list[str]
 ) -> subprocess.CompletedProcess[str]:
     if mode == "run":
         return subprocess.run(
             ["./scripts/run", str(path), "--", *args],
             capture_output=True,
             text=True,
-            env=env,
         )
 
     with tempfile.TemporaryDirectory(
@@ -126,7 +125,6 @@ def run_command(
             ["./scripts/compile", "-c", "-o", str(output_path), str(path)],
             capture_output=True,
             text=True,
-            env=env,
         )
 
 
@@ -146,9 +144,7 @@ def run_case(path: Path, update: bool) -> bool:
     spec = read_spec(path)
     mode = spec.mode or "compile-only"
     args = shlex.split(spec.args) if spec.args else []
-    env = os.environ.copy()
-    env["SMOLCC_SKIP_MAKE"] = "1"
-    result = run_command(path, mode, args, env)
+    result = run_command(path, mode, args)
 
     if update:
         update_spec(path, spec, result)
@@ -159,23 +155,30 @@ def run_case(path: Path, update: bool) -> bool:
     if want_exit is None:
         want_exit = default_exit_for(path)
 
-    output_failures: list[tuple[str, str, str]] = []
     actual_stderr = result.stderr.rstrip('\n')
     actual_stdout = result.stdout.rstrip('\n')
+    stderr_failure, stdout_failure = None, None
     if spec.stderr is not None and actual_stderr != spec.stderr:
-        output_failures.append(("stderr", spec.stderr, actual_stderr))
+        stderr_failure = (spec.stderr, actual_stderr)
     if mode == "run" and spec.stdout is not None and actual_stdout != spec.stdout:
-        output_failures.append(("stdout", spec.stdout, actual_stdout))
+        stdout_failure = (spec.stdout, actual_stdout)
 
-    if result.returncode != want_exit or output_failures:
+    if result.returncode != want_exit or stderr_failure or stdout_failure:
         print(f"{RED}FAIL{RESET}")
         if result.returncode != want_exit:
             print(f"Expected exit code: {want_exit}")
             print(f"Actual exit code:   {result.returncode}\n")
 
-        for stream, expected, actual in output_failures:
-            print_text_block(f"Expected {stream}", expected)
-            print_text_block(f"Actual {stream}", actual)
+        if stderr_failure:
+            expected, actual = stderr_failure
+            print_text_block(f"Expected stderr", expected)
+            print_text_block(f"Actual stderr", actual)
+        else:
+            print_text_block(f"stderr", actual_stderr)
+        if stdout_failure:
+            expected, actual = stdout_failure
+            print_text_block(f"Expected stdout", expected)
+            print_text_block(f"Actual stdout", actual)
         return False
 
     print(f"{GREEN}OK{RESET}")
@@ -203,18 +206,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="rewrite expectations from the current compiler output",
     )
+    parser.add_argument(
+        "--stage",
+        choices=["0", "1", "2"],
+        default="2",
+        help="which stage's compiler to use (default: 2)",
+    )
     return parser.parse_args()
+
+
+def build_smolcc(stage: str) -> str:
+    if stage == "0":
+        subprocess.run(["make"], check=True)
+    else:
+        subprocess.run(["./scripts/bootstrap"], check=True)
+    smolcc_path = Path("out") / stage / "smolcc"
+    os.environ["SMOLCC"] = str(smolcc_path)
 
 
 def main() -> int:
     args = parse_args()
-    build_env = os.environ.copy()
-    build_env["MAKEFLAGS"] = f"{build_env.get('MAKEFLAGS', '')} --silent".strip()
-    subprocess.run(
-        ["make"],
-        check=True,
-        env=build_env,
-    )
+
+    build_smolcc(args.stage)
 
     failures = sum(
         run_group(group, args.update)
