@@ -222,7 +222,7 @@ enum {
 struct ty {
     int kind;
     // for Ty_Ptr and Ty_Arr
-    struct ty *ptr_to;
+    struct ty *base;
     // for Ty_Arr
     int arr_len;
     // for Ty_Func
@@ -245,7 +245,7 @@ static int ty_size(struct ty *t) {
     } else if (t->kind == Ty_Ptr) {
         return 8;
     } else if (t->kind == Ty_Arr) {
-        return ty_size(t->ptr_to) * t->arr_len;
+        return ty_size(t->base) * t->arr_len;
     } else if (t->kind == Ty_Struct) {
         return t->sym->is_defined ? t->sym->size : 0;
     } else if (t->kind == Ty_VaList) {
@@ -257,7 +257,7 @@ static int ty_size(struct ty *t) {
 
 static int ty_align(struct ty *t) {
     if (t->kind == Ty_Arr) {
-        return ty_align(t->ptr_to);
+        return ty_align(t->base);
     } else if (t->kind == Ty_Struct) {
         return t->sym->is_defined ? t->sym->align : 0;
     } else if (t->kind == Ty_VaList) {
@@ -275,9 +275,9 @@ static int ty_eq(struct ty *a, struct ty *b) {
     } else if (a->kind != b->kind) {
         return 0;
     } else if (a->kind == Ty_Ptr) {
-        return a->ptr_to == b->ptr_to;
+        return a->base == b->base;
     } else if (a->kind == Ty_Arr) {
-        return a->arr_len == b->arr_len && a->ptr_to == b->ptr_to;
+        return a->arr_len == b->arr_len && a->base == b->base;
     } else if (a->kind == Ty_Func) {
         if (a->ret_ty != b->ret_ty || a->n_params != b->n_params || a->is_va != b->is_va)
             return 0;
@@ -308,12 +308,12 @@ static int is_func_ty(struct ty *t) {
     return t->kind == Ty_Func;
 }
 static int is_void_ptr(struct ty *t) {
-    return is_ptr_ty(t) && t->ptr_to->kind == Ty_Void;
+    return is_ptr_ty(t) && t->base->kind == Ty_Void;
 }
 static int is_arr_ty(struct ty *t) {
     return t->kind == Ty_Arr;
 }
-static int is_object_ty(struct ty *t) {
+static int is_obj_ty(struct ty *t) {
     return ty_size(t) > 0;
 }
 
@@ -330,14 +330,14 @@ static struct ty *intern_ty(struct ty *t) {
 static struct ty *mk_ptr_ty(struct ty *base) {
     struct ty t;
     t.kind = Ty_Ptr;
-    t.ptr_to = base;
+    t.base = base;
     return intern_ty(&t);
 }
 
 static struct ty *mk_arr_ty(struct ty *base, int len) {
     struct ty t;
     t.kind = Ty_Arr;
-    t.ptr_to = base;
+    t.base = base;
     t.arr_len = len;
     return intern_ty(&t);
 }
@@ -370,7 +370,7 @@ static struct ty *get_common_ptr_ty(struct ty *t1, struct ty *t2) {
     assert("get_common_ptr_ty", is_ptr_ty(t1) && is_ptr_ty(t2));
     if (is_void_ptr(t1) || is_void_ptr(t2))
         return mk_ptr_ty(void_ty);
-    return t1->ptr_to == t2->ptr_to ? t1 : 0;
+    return t1->base == t2->base ? t1 : 0;
 }
 
 static void init_tys() {
@@ -604,7 +604,7 @@ static int is_addressable(struct expr *e) {
     return is_lvalue(e) || e->kind == Expr_Func || e->kind == Expr_Str;
 }
 static int is_assignable(struct expr *e) {
-    return is_lvalue(e) && is_object_ty(e->ty);
+    return is_lvalue(e) && is_obj_ty(e->ty);
 }
 static int is_null_ptr(struct expr *e) {
     return e->kind == Expr_Num && e->int_val == 0
@@ -704,7 +704,7 @@ static struct expr *apply_assign_conv(struct expr *rhs, struct ty *t) {
     } else if (is_ptr_ty(t) && is_null_ptr(rhs)) {
         return cast_to(t, rhs);
     } else if (is_ptr_ty(t) && is_ptr_ty(rhs->ty)) {
-        if (!(t->ptr_to == rhs->ty->ptr_to || is_void_ptr(t) || is_void_ptr(rhs->ty)))
+        if (!(t->base == rhs->ty->base || is_void_ptr(t) || is_void_ptr(rhs->ty)))
             err_at(&rhs->pos, "target type mismatch");
         return cast_to(t, rhs);
     } else {
@@ -714,7 +714,7 @@ static struct expr *apply_assign_conv(struct expr *rhs, struct ty *t) {
 
 static struct expr *ptr_decay(struct expr *e) {
     if (is_arr_ty(e->ty)) {
-        return wrap_with(Expr_Cast, mk_ptr_ty(e->ty->ptr_to), wrap_with(Expr_Addr, mk_ptr_ty(e->ty), e));
+        return wrap_with(Expr_Cast, mk_ptr_ty(e->ty->base), wrap_with(Expr_Addr, mk_ptr_ty(e->ty), e));
     } else if (is_func_ty(e->ty)) {
         return wrap_with(Expr_Addr, mk_ptr_ty(e->ty), e);
     } else {
@@ -753,7 +753,7 @@ static struct expr *elab_expr(struct expr *e) {
         e->ty = e->subs[0]->ty;
     } else if (e->kind == Expr_Call) {
         struct expr *callee = e->subs[0];
-        if (!is_ptr_ty(callee->ty) || callee->ty->ptr_to->kind != Ty_Func)
+        if (!is_ptr_ty(callee->ty) || callee->ty->base->kind != Ty_Func)
             err_at(&callee->pos, "called object is not a function");
         if (callee->kind != Expr_Addr || callee->subs[0]->kind != Expr_Func)
             err_at(&callee->pos, "indirect calls are not supported");
@@ -791,7 +791,7 @@ static struct expr *elab_expr(struct expr *e) {
     } else if (e->kind == Expr_Deref) {
         if (!is_ptr_ty(e->subs[0]->ty))
             err_at(&e->pos, "operand not a pointer");
-        e->ty = e->subs[0]->ty->ptr_to;
+        e->ty = e->subs[0]->ty->base;
     } else if (e->kind == Expr_Neg) {
         if (!is_integer_ty(e->subs[0]->ty))
             err_at(&e->pos, "operand must be integer");
@@ -1169,7 +1169,7 @@ static struct expr *p_expr(int rbp) {
         expect("(");
         struct ty *ty = p_tyname();
         expect(")");
-        if (!is_object_ty(ty))
+        if (!is_obj_ty(ty))
             err_at(&pos, "sizeof operand must be object");
         acc = mk_expr(&pos, Expr_Num, 0);
         acc->int_val = ty_size(ty);
@@ -1530,7 +1530,7 @@ static void p_decl(int scope, void *ctx) {
             return;  // max one type per abstract declaration
         } else if (scope == Decl_Param) {
             if (is_arr_ty(ty)) {
-                ty = mk_ptr_ty(ty->ptr_to);
+                ty = mk_ptr_ty(ty->base);
             } else if (is_func_ty(ty)) {
                 ty = mk_ptr_ty(ty);
             }
@@ -1562,7 +1562,7 @@ static void p_decl(int scope, void *ctx) {
             }
         } else {
             // object declaration
-            if (!is_object_ty(ty))
+            if (!is_obj_ty(ty))
                 err_at(&name_pos, "bad object type");
             if (scope == Decl_Local) {
                 struct stmt *decl = mk_stmt(&pos, Stmt_Decl);
@@ -1699,7 +1699,7 @@ static void emit_arith_expr(struct expr *e, const char *op) {
 }
 
 static void emit_assign_to_addr(struct ty *dst_ty, struct expr *rhs) {
-    assert("emit_assign_to_addr", is_object_ty(dst_ty));
+    assert("emit_assign_to_addr", is_obj_ty(dst_ty));
     if (is_scalar(dst_ty)) {
         emit_push(0);
         emit_expr(rhs);
@@ -1763,7 +1763,7 @@ static void emit_expr(struct expr *e) {
         emit_str_load(e->str_val);
     } else if (e->kind == Expr_PostDec || e->kind == Expr_PostInc) {
         const char *op = e->kind == Expr_PostInc ? "add" : "sub";
-        int step = is_ptr_ty(e->ty) ? ty_size(e->ty->ptr_to) : 1;
+        int step = is_ptr_ty(e->ty) ? ty_size(e->ty->base) : 1;
         emit_place_expr(e->subs[0]);
         write_str(1, "mov x2, x0\n");
         emit_load(e->ty, 0, 0);
@@ -1828,7 +1828,7 @@ static void emit_expr(struct expr *e) {
         write_str(1, "cset x0, ne\n");
     } else if (e->kind == Expr_PtrAdd || e->kind == Expr_PtrSub) {
         const char *op = e->kind == Expr_PtrAdd ? "add" : "sub";
-        int size = ty_size(e->subs[0]->ty->ptr_to);
+        int size = ty_size(e->subs[0]->ty->base);
         emit_bin_subs(e);
         if (size != 1) {
             emit_int_load(size, 2);
@@ -1836,7 +1836,7 @@ static void emit_expr(struct expr *e) {
         }
         writef(1, "%s x0, x0, x1\n", op);
     } else if (e->kind == Expr_PtrDiff) {
-        int size = ty_size(e->subs[0]->ty->ptr_to);
+        int size = ty_size(e->subs[0]->ty->base);
         emit_bin_subs(e);
         write_str(1, "sub x0, x0, x1\n");
         if (size != 1) {
