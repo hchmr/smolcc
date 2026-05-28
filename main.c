@@ -777,7 +777,7 @@ static struct expr *elab_expr(struct expr *e) {
         struct expr **args = &e->subs[1];
         int n_args = e->n_subs - 1;
         if (n_args > func->n_params && !func->is_va)
-                    err_at(&e->pos, "too many arguments");
+            err_at(&e->pos, "too many arguments");
         if (n_args < func->n_params)
             err_at(&e->pos, "too few arguments");
         for (int i = 0; i < n_args; i++) {

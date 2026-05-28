@@ -2,25 +2,85 @@
 
 import re
 import sys
+import argparse
+import os
+from typing import Iterable, TextIO
 
-for line in sys.stdin:
-    line = line.strip()
 
-    m = re.fullmatch(r'(?:(//.*)|("(?:\\.|[^"\\])*")|.)*', line)
-    if m and m.group(1):
-        comment = m.group(1)
-        line = line[: m.start(1)].rstrip()
-    else:
-        comment = ""
+def format_line(raw_line: str) -> str | None:
+    line = raw_line.strip()
 
     if not line:
-        pass
-    elif line.endswith(":"):
-        pass
+        return ""
+    elif m := re.fullmatch(r"(\S+) *:", line):
+        return f"{m.group(1)}:"
+    elif line.startswith("//"):
+        raw_indent = raw_line.index("//")
+        if raw_indent == 0:
+            return line
+        elif raw_indent < 8:
+            return " " * 4 + line
+        else:
+            return " " * 40 + line
     elif re.match(r"^\.?\w", line):
+        for m in re.finditer(r'(//.*)|"(?:[^"]|\\.)*"?|.', line):
+            if m.group(1) is not None:
+                i = m.start(1)
+                line, comment = line[:i].rstrip(), line[i:]
+                break
+        else:
+            comment = ""
+
         parts = line.split(None, 1)
         mnemonic = parts[0]
         operands = parts[1] if len(parts) > 1 else ""
         line = f"    {mnemonic:<7} {operands}"
 
-    print(f"{line:<40}{comment}".rstrip())
+        return f"{line:<40}{comment}".rstrip()
+    else:
+        return line
+
+
+def format_lines(raw_lines: Iterable[str], fout: TextIO) -> None:
+    for raw_line in raw_lines:
+        formatted_line = format_line(raw_line)
+        if formatted_line is not None:
+            print(formatted_line, file=fout)
+
+
+parser = argparse.ArgumentParser(description="Format assembly file")
+parser.add_argument("input", nargs="*", help="input files (default: stdin)")
+parser.add_argument("-i", "--in-place", action="store_true", help="edit file in place")
+parser.add_argument("-o", "--output", help="output file (default: stdout, ignored if --in-place is used)")
+
+args = parser.parse_args()
+
+for input_file in args.input or [None]:
+    inp, out = sys.stdin, sys.stdout
+
+    try:
+        if args.output:
+            out_file = args.output
+        elif args.in_place and input_file:
+            out_file = input_file
+        else:
+            out_file = None
+
+        if input_file:
+            inp = open(input_file, "r")
+
+        # Buffer the entire file if we need to read and write the same file
+        if input_file and out_file and os.path.abspath(out_file) == os.path.abspath(input_file):
+            lines = inp.readlines()
+        else:
+            lines = inp
+
+        if out_file:
+            out = open(out_file, "w")
+
+        format_lines(lines, out)
+    finally:
+        if inp is not sys.stdin:
+            inp.close()
+        if out is not sys.stdout:
+            out.close()
