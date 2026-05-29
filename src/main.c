@@ -1166,13 +1166,12 @@ static struct expr *p_expr(int rbp) {
     } else if (eat("*")) {
         acc = mk_unary_expr(&pos, Expr_Deref, p_expr(Prec_Unary));
     } else if (eat("sizeof")) {
-        expect("(");
-        struct ty *ty = p_tyname();
-        expect(")");
-        if (!is_obj_ty(ty))
-            err_at(&pos, "sizeof operand must be object");
         acc = mk_expr(&pos, Expr_Num, 0);
-        acc->int_val = ty_size(ty);
+        expect("(");
+        acc->int_val = ty_size(p_tyname());
+        expect(")");
+        if (acc->int_val <= 0)
+            err_at(&pos, "sizeof operand must be object");
     } else if (eat("va_start")) {
         acc = mk_expr(&pos, Expr_VaStart, 2);
         expect("(");
@@ -1497,8 +1496,7 @@ static void p_decl(int scope, void *ctx) {
                     err_at(&name_pos, "too many parameters");
                 if (n_params > 0) {
                     expect(",");
-                    if (eat("...")) {
-                        is_va = 1;
+                    if ((is_va = eat("..."))) {
                         break;
                     }
                 }
