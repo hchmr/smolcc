@@ -5,7 +5,7 @@ SRCS = $(SRC_DIR)/smolcc.c
 ASMS = $(SRC_DIR)/sys.s
 OBJS = $(SRCS:$(SRC_DIR)/%.c=$(OUT_DIR)/%.o) \
 	   $(ASMS:$(SRC_DIR)/%.s=$(OUT_DIR)/%.o)
-CC = cc
+CC ?= cc
 CFLAGS = -g -ffreestanding -fno-builtin \
 	-std=c99 \
 	-Wall -Wextra -Wpedantic \

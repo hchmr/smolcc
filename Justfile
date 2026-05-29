@@ -1,6 +1,5 @@
 test *args:
-    ./scripts/test {{args}}
-    ./scripts/bootstrap
+    ./scripts/test --stage=2 {{args}}
 
 bootstrap:
     ./scripts/bootstrap

@@ -17,6 +17,7 @@ Options:
 EOF
 }
 
+cc=${CC:-cc}
 smolcc=${SMOLCC:-smolcc}
 output_file=
 stop_after_asm=false
@@ -68,9 +69,9 @@ if [[ $stop_after_asm == true ]]; then
     exit 0
 fi
 
-cc "$asm_file" -g -c -o "$obj_file"
+"$cc" "$asm_file" -g -c -o "$obj_file"
 if [[ $stop_after_obj == true ]]; then
     exit 0
 fi
 
-cc "$obj_file" -g -o "$exe_file"
+"$cc" "$obj_file" -g -o "$exe_file"
