@@ -695,19 +695,19 @@ static void unify_ptr_subs(struct expr **args) {
     args[1] = cast_to(ptr_ty, args[1]);
 }
 
-static struct expr *apply_assign_conv(struct expr *rhs, struct ty *t) {
-    if (rhs->ty == t) {
-        return rhs;
-    } else if (is_integer_ty(rhs->ty) && is_integer_ty(t)) {
-        return cast_to(t, rhs);
-    } else if (is_ptr_ty(t) && is_null_ptr(rhs)) {
-        return cast_to(t, rhs);
-    } else if (is_ptr_ty(t) && is_ptr_ty(rhs->ty)) {
-        if (!(t->base == rhs->ty->base || is_void_ptr(t) || is_void_ptr(rhs->ty)))
-            err_at(&rhs->pos, "target type mismatch");
-        return cast_to(t, rhs);
+static struct expr *apply_assign_conv(struct expr *e, struct ty *t) {
+    if (e->ty == t) {
+        return e;
+    } else if (is_integer_ty(e->ty) && is_integer_ty(t)) {
+        return cast_to(t, e);
+    } else if (is_ptr_ty(t) && is_null_ptr(e)) {
+        return cast_to(t, e);
+    } else if (is_ptr_ty(t) && is_ptr_ty(e->ty)) {
+        if (!(t->base == e->ty->base || is_void_ptr(t) || is_void_ptr(e->ty)))
+            err_at(&e->pos, "target type mismatch");
+        return cast_to(t, e);
     } else {
-        err_at(&rhs->pos, "target type mismatch");
+        err_at(&e->pos, "target type mismatch");
     }
 }
 
@@ -1287,76 +1287,76 @@ static int p_const_expr() {
 
 static struct stmt *p_stmt() {
     struct pos pos = tok_pos;
-    struct stmt *stmt;
+    struct stmt *s;
     if (eat("{")) {
-        stmt = mk_stmt(&pos, Stmt_Block);
+        s = mk_stmt(&pos, Stmt_Block);
         push_scope();
-        for (struct stmt **lastp = &stmt->sub; !eat("}"); lastp = &(*lastp)->next) {
+        for (struct stmt **lastp = &s->sub; !eat("}"); lastp = &(*lastp)->next) {
             *lastp = p_stmt();
         }
         pop_scope();
     } else if (eat("return")) {
-        stmt = mk_stmt(&pos, Stmt_Return);
+        s = mk_stmt(&pos, Stmt_Return);
         if (!is_void_ty(curr_func->ty->ret_ty)) {
-            stmt->expr = elab_expr_expect(p_expr(0), curr_func->ty->ret_ty);
+            s->expr = elab_expr_expect(p_expr(0), curr_func->ty->ret_ty);
         }
         expect(";");
     } else if (eat("if")) {
-        stmt = mk_stmt(&pos, Stmt_If);
+        s = mk_stmt(&pos, Stmt_If);
 
         expect("(");
-        stmt->expr = elab_cond_expr(p_expr(0));
+        s->expr = elab_cond_expr(p_expr(0));
         expect(")");
 
         push_scope();
-        stmt->sub = p_stmt();
+        s->sub = p_stmt();
         pop_scope();
 
         if (eat("else")) {
             push_scope();
-            stmt->sub->next = p_stmt();
+            s->sub->next = p_stmt();
             pop_scope();
         }
 
     } else if (at("for") || at("while")) {
         struct stmt *outer_loop = curr_loop;
-        curr_loop = stmt = mk_stmt(&pos, Stmt_Loop);
+        curr_loop = s = mk_stmt(&pos, Stmt_Loop);
 
         int is_while = eat("while") || !eat("for");
 
         push_scope();
         expect("(");
         if (is_while) {
-            stmt->expr = elab_cond_expr(p_expr(0));
-            stmt->sub = mk_stmt(&pos, Stmt_Empty);
-            stmt->sub->next = mk_stmt(&pos, Stmt_Empty);
+            s->expr = elab_cond_expr(p_expr(0));
+            s->sub = mk_stmt(&pos, Stmt_Empty);
+            s->sub->next = mk_stmt(&pos, Stmt_Empty);
         } else {
             if (eat(";")) {
-                stmt->sub = mk_stmt(&pos, Stmt_Empty);
+                s->sub = mk_stmt(&pos, Stmt_Empty);
             } else if (at_decl()) {
-                stmt->sub = p_stmt();
+                s->sub = p_stmt();
             } else {
-                stmt->sub = mk_stmt(&pos, Stmt_Expr);
-                stmt->sub->expr = elab_rvalue_expr(p_expr(0));
+                s->sub = mk_stmt(&pos, Stmt_Expr);
+                s->sub->expr = elab_rvalue_expr(p_expr(0));
                 expect(";");
             }
 
             if (!at(";")) {
-                stmt->expr = elab_cond_expr(p_expr(0));
+                s->expr = elab_cond_expr(p_expr(0));
             }
             expect(";");
 
             if (!at(")")) {
-                stmt->sub->next = mk_stmt(&pos, Stmt_Expr);
-                stmt->sub->next->expr = elab_rvalue_expr(p_expr(0));
+                s->sub->next = mk_stmt(&pos, Stmt_Expr);
+                s->sub->next->expr = elab_rvalue_expr(p_expr(0));
             } else {
-                stmt->sub->next = mk_stmt(&pos, Stmt_Empty);
+                s->sub->next = mk_stmt(&pos, Stmt_Empty);
             }
         }
         expect(")");
 
         push_scope();
-        stmt->sub->next->next = p_stmt();
+        s->sub->next->next = p_stmt();
         pop_scope();
         pop_scope();
         curr_loop = outer_loop;
@@ -1364,21 +1364,21 @@ static struct stmt *p_stmt() {
         if (!curr_loop)
             err_at(&pos, "break/continue outside loop");
         int kind = eat("break") || !eat("continue") ? Stmt_Break : Stmt_Continue;
-        stmt = mk_stmt(&pos, kind);
-        stmt->sub = curr_loop;
+        s = mk_stmt(&pos, kind);
+        s->sub = curr_loop;
         expect(";");
     } else if (eat(";")) {
-        stmt = mk_stmt(&pos, Stmt_Empty);
+        s = mk_stmt(&pos, Stmt_Empty);
     } else if (at_decl()) {
-        stmt = 0;
-        p_decl(Decl_Local, &stmt);
-        stmt = stmt ? stmt : mk_stmt(&pos, Stmt_Empty);
+        s = 0;
+        p_decl(Decl_Local, &s);
+        s = s ? s : mk_stmt(&pos, Stmt_Empty);
     } else {
-        stmt = mk_stmt(&pos, Stmt_Expr);
-        stmt->expr = elab_rvalue_expr(p_expr(0));
+        s = mk_stmt(&pos, Stmt_Expr);
+        s->expr = elab_rvalue_expr(p_expr(0));
         expect(";");
     }
-    return stmt;
+    return s;
 }
 
 static struct ty *p_struct() {
@@ -1675,22 +1675,22 @@ static void emit_arith_expr(struct expr *e, const char *op) {
     writef(stdout, "%s x0, x0, x1\n", op);
 }
 
-static void emit_assign_to_addr(struct ty *dst_ty, struct expr *rhs) {
+static void emit_assign_to_addr(struct ty *dst_ty, struct expr *e) {
     assert("emit_assign_to_addr", is_obj_ty(dst_ty));
     if (is_scalar(dst_ty)) {
         emit_push(0);
-        emit_expr(rhs);
+        emit_expr(e);
         emit_pop(1);
         emit_store(dst_ty, 0, 1);
     } else {
         emit_push(0);
-        if (rhs->kind == Expr_Assign) {
-            emit_place_expr(rhs->subs[0]);
-            emit_assign_to_addr(rhs->ty, rhs->subs[1]);
+        if (e->kind == Expr_Assign) {
+            emit_place_expr(e->subs[0]);
+            emit_assign_to_addr(e->ty, e->subs[1]);
         } else {
-            if (!is_addressable(rhs))
-                die("emit_assign_to_addr: unreachable: %d", rhs->kind);
-            emit_place_expr(rhs);
+            if (!is_addressable(e))
+                die("emit_assign_to_addr: unreachable: %d", e->kind);
+            emit_place_expr(e);
         }
         writef(stdout, "mov x1, x0\n");
         emit_pop(0);
@@ -1866,62 +1866,62 @@ static void emit_expr(struct expr *e) {
     }
 }
 
-static void emit_init_decls(struct stmt *stmt) {
-    if (!stmt)
+static void emit_init_decls(struct stmt *s) {
+    if (!s)
         return;
-    emit_init_decls(stmt->sub);
-    if (stmt->expr) {
-        emit_frame_addr(stmt->sym->offs, 0);
-        emit_assign_to_addr(stmt->sym->ty, stmt->expr);
+    emit_init_decls(s->sub);
+    if (s->expr) {
+        emit_frame_addr(s->sym->offs, 0);
+        emit_assign_to_addr(s->sym->ty, s->expr);
     }
 }
 
-static void emit_stmt(struct stmt *stmt) {
-    writef(stdout, "// %s:%d:%d\n", stmt->pos.file, stmt->pos.line, stmt->pos.col);  // debug info
-    if (stmt->kind == Stmt_Block) {
-        for (struct stmt *sub = stmt->sub; sub; sub = sub->next) {
+static void emit_stmt(struct stmt *s) {
+    writef(stdout, "// %s:%d:%d\n", s->pos.file, s->pos.line, s->pos.col);  // debug info
+    if (s->kind == Stmt_Block) {
+        for (struct stmt *sub = s->sub; sub; sub = sub->next) {
             emit_stmt(sub);
         }
-    } else if (stmt->kind == Stmt_Return) {
-        if (stmt->expr) {
-            emit_expr(stmt->expr);
+    } else if (s->kind == Stmt_Return) {
+        if (s->expr) {
+            emit_expr(s->expr);
         }
         writef(stdout, "b .L.return.%s\n", curr_func->name);
-    } else if (stmt->kind == Stmt_If) {
+    } else if (s->kind == Stmt_If) {
         int cond_id = next_cond_id++;
-        emit_expr(stmt->expr);
+        emit_expr(s->expr);
         writef(stdout, "cbz x0, .L.if.%d.else\n", cond_id);
-        emit_stmt(stmt->sub);
+        emit_stmt(s->sub);
         writef(stdout, "b .L.if.%d.end\n", cond_id);
         writef(stdout, ".L.if.%d.else:\n", cond_id);
-        if (stmt->sub->next) {
-            emit_stmt(stmt->sub->next);
+        if (s->sub->next) {
+            emit_stmt(s->sub->next);
         }
         writef(stdout, ".L.if.%d.end:\n", cond_id);
-    } else if (stmt->kind == Stmt_Loop) {
-        stmt->loop_id = next_loop_id++;
-        emit_stmt(stmt->sub);
-        writef(stdout, "b .L.loop.%d.cond\n", stmt->loop_id);
-        writef(stdout, ".L.loop.%d.body:\n", stmt->loop_id);
-        emit_stmt(stmt->sub->next->next);
-        writef(stdout, ".L.loop.%d.step:\n", stmt->loop_id);
-        emit_stmt(stmt->sub->next);
-        writef(stdout, ".L.loop.%d.cond:\n", stmt->loop_id);
-        if (stmt->expr) {
-            emit_expr(stmt->expr);
-            writef(stdout, "cbnz x0, .L.loop.%d.body\n", stmt->loop_id);
+    } else if (s->kind == Stmt_Loop) {
+        s->loop_id = next_loop_id++;
+        emit_stmt(s->sub);
+        writef(stdout, "b .L.loop.%d.cond\n", s->loop_id);
+        writef(stdout, ".L.loop.%d.body:\n", s->loop_id);
+        emit_stmt(s->sub->next->next);
+        writef(stdout, ".L.loop.%d.step:\n", s->loop_id);
+        emit_stmt(s->sub->next);
+        writef(stdout, ".L.loop.%d.cond:\n", s->loop_id);
+        if (s->expr) {
+            emit_expr(s->expr);
+            writef(stdout, "cbnz x0, .L.loop.%d.body\n", s->loop_id);
         } else {
-            writef(stdout, "b .L.loop.%d.body\n", stmt->loop_id);
+            writef(stdout, "b .L.loop.%d.body\n", s->loop_id);
         }
-        writef(stdout, ".L.loop.%d.end:\n", stmt->loop_id);
-    } else if (stmt->kind == Stmt_Break || stmt->kind == Stmt_Continue) {
-        writef(stdout, "b .L.loop.%d.%s\n", stmt->sub->loop_id, stmt->kind == Stmt_Break ? "end" : "step");
-    } else if (stmt->kind == Stmt_Decl) {
-        emit_init_decls(stmt);
-    } else if (stmt->kind == Stmt_Expr) {
-        emit_expr(stmt->expr);
-    } else if (stmt->kind != Stmt_Empty) {
-        die("emit_stmt: unreachable: %d", stmt->kind);
+        writef(stdout, ".L.loop.%d.end:\n", s->loop_id);
+    } else if (s->kind == Stmt_Break || s->kind == Stmt_Continue) {
+        writef(stdout, "b .L.loop.%d.%s\n", s->sub->loop_id, s->kind == Stmt_Break ? "end" : "step");
+    } else if (s->kind == Stmt_Decl) {
+        emit_init_decls(s);
+    } else if (s->kind == Stmt_Expr) {
+        emit_expr(s->expr);
+    } else if (s->kind != Stmt_Empty) {
+        die("emit_stmt: unreachable: %d", s->kind);
     }
 }
 
