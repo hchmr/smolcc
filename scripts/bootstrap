@@ -14,12 +14,12 @@ run "mkdir -p out/1 out/2"
 make
 
 # stage 1: self-compile with stage 0 compiler
-run "./out/0/smolcc < src/main.c | ./scripts/asm-fmt > out/1/main.s"
-run "cc -nostdlib -o out/1/smolcc out/1/main.s src/sys.s"
+run "./out/0/smolcc < src/smolcc.c | ./scripts/asm-fmt > out/1/smolcc.s"
+run "cc -nostdlib -o out/1/smolcc out/1/smolcc.s src/sys.s"
 
 # stage 2: self-compile with stage 1 compiler
-run "./out/1/smolcc < src/main.c | ./scripts/asm-fmt > out/2/main.s"
-run "diff -u out/1/main.s out/2/main.s"
-run "cc -nostdlib -o out/2/smolcc out/2/main.s src/sys.s"
+run "./out/1/smolcc < src/smolcc.c | ./scripts/asm-fmt > out/2/smolcc.s"
+run "diff -u out/1/smolcc.s out/2/smolcc.s"
+run "cc -nostdlib -o out/2/smolcc out/2/smolcc.s src/sys.s"
 
 echo "PASS"

@@ -1,7 +1,7 @@
 OUT_DIR = out/0
 SRC_DIR = src
 SMOLCC = $(OUT_DIR)/smolcc
-SRCS = $(SRC_DIR)/main.c
+SRCS = $(SRC_DIR)/smolcc.c
 ASMS = $(SRC_DIR)/sys.s
 OBJS = $(SRCS:$(SRC_DIR)/%.c=$(OUT_DIR)/%.o) \
 	   $(ASMS:$(SRC_DIR)/%.s=$(OUT_DIR)/%.o)
