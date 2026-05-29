@@ -667,9 +667,7 @@ static struct expr *wrap_with(int kind, struct ty *ty, struct expr *orig) {
 // coercion
 static struct expr *cast_to(struct ty *t, struct expr *e) {
     assert("cast_to", is_scalar(t) && is_scalar(e->ty));
-    if (e->ty == t)
-        return e;
-    return wrap_with(Expr_Cast, t, e);
+    return e->ty != t ? wrap_with(Expr_Cast, t, e) : e;
 }
 
 static void apply_ua_conv(struct expr **args) {
@@ -722,19 +720,13 @@ static struct expr *ptr_decay(struct expr *e) {
     }
 }
 
-static struct expr *elab_expr(struct expr *e);
-
-static void elab_subexprs(struct expr *e) {
+static struct expr *elab_expr(struct expr *e) {
     for (int i = 0; i < e->n_subs; i++) {
         e->subs[i] = elab_expr(e->subs[i]);
         if (e->kind != Expr_Addr) {
             e->subs[i] = ptr_decay(e->subs[i]);
         }
     }
-}
-
-static struct expr *elab_expr(struct expr *e) {
-    elab_subexprs(e);
 
     if (e->kind == Expr_Num) {
         e->ty = int_ty;
@@ -758,18 +750,13 @@ static struct expr *elab_expr(struct expr *e) {
         if (callee->kind != Expr_Addr || callee->subs[0]->kind != Expr_Func)
             err_at(&callee->pos, "indirect calls are not supported");
         struct ty *func = callee->subs[0]->sym->ty;
-        struct expr **args = &e->subs[1];
-        int n_args = e->n_subs - 1;
-        if (n_args > func->n_params && !func->is_va)
-            err_at(&e->pos, "too many arguments");
-        if (n_args < func->n_params)
-            err_at(&e->pos, "too few arguments");
-        for (int i = 0; i < n_args; i++) {
+        if (e->n_subs - 1 > func->n_params && !func->is_va || e->n_subs - 1 < func->n_params)
+            err_at(&e->pos, "wrong number of arguments");
+        for (int i = 0; i < e->n_subs - 1; i++) {
             if (i < func->n_params) {
-                args[i] = apply_assign_conv(args[i], func->param_tys[i]);
-            } else {
-                if (!is_scalar(args[i]->ty))
-                    err_at(&args[i]->pos, "variadic arguments must be scalar");
+                e->subs[i + 1] = apply_assign_conv(e->subs[i + 1], func->param_tys[i]);
+            } else if (!is_scalar(e->subs[i + 1]->ty)) {
+                err_at(&e->subs[i + 1]->pos, "variadic arguments must be scalar");
             }
         }
         e->ty = func->ret_ty;
@@ -779,11 +766,10 @@ static struct expr *elab_expr(struct expr *e) {
         struct sym *sym = e->subs[0]->ty->sym;
         if (!sym->is_defined)
             err_at(&e->pos, "member access on incomplete struct");
-        struct sym *fld = lookup_in(sym->scope, 0, e->fld_name);
-        if (!fld)
+        e->sym = lookup_in(sym->scope, 0, e->fld_name);
+        if (!e->sym)
             err_at(&e->pos, "no such member");
-        e->sym = fld;
-        e->ty = fld->ty;
+        e->ty = e->sym->ty;
     } else if (e->kind == Expr_Addr) {
         if (!is_addressable(e->subs[0]))
             err_at(&e->pos, "operand not addressable");
