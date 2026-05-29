@@ -1437,15 +1437,6 @@ static struct ty *p_enum() {
     return int_ty;
 }
 
-static struct ty *p_decl_arr(struct ty *base_ty) {
-    int len = p_const_expr();
-    expect("]");
-    if (eat("[")) {
-        base_ty = p_decl_arr(base_ty);
-    }
-    return mk_arr_ty(base_ty, len);
-}
-
 static void p_decl(int scope, void *ctx) {
     struct pos pos = tok_pos;
     int storage = 0;
@@ -1520,7 +1511,8 @@ static void p_decl(int scope, void *ctx) {
             ty = mk_func_ty(ty, param_tys, n_params, is_va);
             pop_scope();
         } else if (eat("[")) {
-            ty = p_decl_arr(ty);
+            ty = mk_arr_ty(ty, p_const_expr());
+            expect("]");
         } else if (eat("=") && (scope == Decl_Global || scope == Decl_Local)) {
             init = p_expr(Prec_Comma);
         }
