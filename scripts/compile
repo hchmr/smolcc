@@ -59,7 +59,11 @@ else
     exe_file="${output_file}"
 fi
 
-"$smolcc" "$source_file" | ./scripts/asm-fmt > "$asm_file"
+"$smolcc" \
+    < "$source_file" \
+    >(sed "s|<stdin>:|$source_file:|g" | ./scripts/asm-fmt) \
+    2> >(sed "s|<stdin>:|$source_file:|g" >&2) \
+    > "$asm_file"
 if [[ $stop_after_asm == true ]]; then
     exit 0
 fi

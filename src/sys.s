@@ -1,17 +1,5 @@
     .section .text
 
-// int open(const char *pathname, int flags, int mode);
-    .globl  open
-open:
-    // openat(AT_FDCWD, pathname, flags, mode)
-    mov     x3, x2
-    mov     x2, x1
-    mov     x1, x0
-    mov     x0, #-100
-    mov     w8, #56
-    svc     #0
-    ret
-
 // ssize_t read(int fildes, void *buf, size_t nbyte);
     .globl  read
 read:

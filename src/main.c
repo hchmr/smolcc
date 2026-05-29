@@ -4,7 +4,6 @@
 //= unistd
 
 enum { stdin = 0, stdout = 1, stderr = 2 };
-extern int open(const char *pathname, int flags, int mode);
 extern int read(int fd, void *buf, int count);
 extern int write(int fd, const void *buf, int count);
 extern void _exit(int status);
@@ -151,14 +150,13 @@ static struct string *intern(const char *s, int len) {
 //= diag
 
 struct pos {
-    const char *file;
     int line, col;
 };
 
 static void err_at(struct pos *pos, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    writef(stderr, "%s:%d:%d: error: ", pos->file, pos->line, pos->col);
+    writef(stderr, "%s:%d:%d: error: ", "<stdin>", pos->line, pos->col);
     vwritef(stderr, fmt, &args);
     va_end(args);
     _exit(1);
@@ -434,7 +432,7 @@ static struct sym *lookup(int ns, const char *name) {
 
 static void decl_conflict(struct pos *pos, struct sym *sym, const char *msg) {
     struct pos other = sym->last_pos;
-    err_at(pos, "'%s' %s. Previous declaration at %s:%d:%d", sym->name, msg, other.file, other.line, other.col);
+    err_at(pos, "'%s' %s. Previous declaration at %s:%d:%d", sym->name, msg, "<stdin>", other.line, other.col);
 }
 
 static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, int storage, const char *name,
@@ -931,8 +929,6 @@ enum {
 
 enum { MAX_TOK_LEN = 255 };
 
-static int inp;
-
 enum { RDBUF_CAP = 256 };
 static char rdbuf[RDBUF_CAP];
 static int rdbuf_len, rdbuf_pos;
@@ -951,7 +947,7 @@ static struct {
 static int peek_char() {
     if (rdbuf_pos < rdbuf_len)
         return rdbuf[rdbuf_pos];
-    rdbuf_pos = 0, rdbuf_len = read(inp, rdbuf, RDBUF_CAP);
+    rdbuf_pos = 0, rdbuf_len = read(stdin, rdbuf, RDBUF_CAP);
     return (rdbuf_len <= 0) ? EOF : rdbuf[rdbuf_pos];
 }
 
@@ -1877,7 +1873,7 @@ static void emit_init_decls(struct stmt *s) {
 }
 
 static void emit_stmt(struct stmt *s) {
-    writef(stdout, "// %s:%d:%d\n", s->pos.file, s->pos.line, s->pos.col);  // debug info
+    writef(stdout, "// %s:%d:%d\n", "<stdin>", s->pos.line, s->pos.col);  // debug info
     if (s->kind == Stmt_Block) {
         for (struct stmt *sub = s->sub; sub; sub = sub->next) {
             emit_stmt(sub);
@@ -2028,21 +2024,10 @@ static void emit_str_literals() {
 //=============================================================================
 //= main
 
-int main(int argc, char **argv) {
-    if (argc != 2) {
-        writef(stderr, "usage: smolcc <file>\n");
-        return 1;
-    }
-    const char *file_name = argv[1];
-    if (inp = open(file_name, 0, 0), inp < 0) {
-        writef(stderr, "error: cannot open '%s'\n", file_name);
-        return 1;
-    }
-
+int main() {
     init_tys();
 
     // lexer
-    chr_pos.file = file_name;
     chr_pos.line = chr_pos.col = 1;
     next_chr();
 
