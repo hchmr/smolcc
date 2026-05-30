@@ -1,24 +1,42 @@
 //# mode: run
-//# args: -lwcL tests/good/libc/wc.c tests/good/libc/write.c tests/good/varags/printf.c
-//# exit: 1
-//# stderr: Error opening file tests/good/varags/printf.c
-//# stdout:      192     600    4947      88 tests/good/libc/wc.c
-//# stdout:       12      39     222      54 tests/good/libc/write.c
+//# args: -lwcL tests/good/extern/wc.c tests/good/extern/write.c tests/good/extern/printf.c
+//# exit: 0
+//# stdout:      211     616    5198      92 tests/good/extern/wc.c
+//# stdout:       12      39     222      54 tests/good/extern/write.c
+//# stdout:       10      26     166      44 tests/good/extern/printf.c
+//# stdout:      233     681    5586      92 total
+
+//------------------------------------------------------------------------------
+//- libc
+
+// stdlib
+
+extern void exit(int status);
+
+// stdio
+
+enum { EOF = -1 };
 
 struct File;
 
-extern struct File *stdin;
-extern struct File *stderr;
-extern struct File *stdout;
+extern struct File *stdin, *stderr, *stdout;
+
 extern int fgetc(struct File *stream);
 extern int fprintf(struct File *stream, const char *format, ...);
 extern int ferror(struct File *stream);
 extern struct File *fopen(const char *file_name, const char *mode);
 extern int fclose(struct File *stream);
-extern int isspace(int c);
-extern void exit(int status);
 
-enum { EOF = -1 };
+// errno
+
+extern void perror(const char *msg);
+
+// ctype
+
+extern int isspace(int c);
+
+//------------------------------------------------------------------------------
+//- wc
 
 struct Stats {
     int lines;
@@ -50,7 +68,7 @@ void stats_zero(struct Stats *stats) {
 struct File *open_file(const char *file_name) {
     struct File *stream = fopen(file_name, "r");
     if (!stream) {
-        fprintf(stderr, "Error opening file %s\n", file_name);
+        perror("Error opening file");
         exit(1);
     }
     return stream;
@@ -58,7 +76,7 @@ struct File *open_file(const char *file_name) {
 
 void close_file(struct File *stream) {
     if (fclose(stream) != 0) {
-        fprintf(stderr, "Error closing file\n");
+        perror("Error closing file");
         exit(1);
     }
 }
@@ -66,7 +84,7 @@ void close_file(struct File *stream) {
 int get_char(struct File *stream) {
     int c = fgetc(stream);
     if (c == EOF && ferror(stream) != 0) {
-        fprintf(stderr, "Error reading file\n");
+        perror("Error reading file");
         exit(1);
     }
     return c;

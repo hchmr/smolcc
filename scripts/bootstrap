@@ -13,7 +13,7 @@ run "rm -rf out"
 run "mkdir -p out/1 out/2"
 
 # stage 0: use host toolchain
-make
+make -f stage0.mk
 
 # stage 1: self-compile with stage 0 compiler
 run "./out/0/smolcc < src/smolcc.c | ./scripts/asm-fmt > out/1/smolcc.s"

@@ -158,6 +158,7 @@ static void err_at(struct pos *pos, const char *fmt, ...) {
     va_start(args, fmt);
     writef(stderr, "%s:%d:%d: error: ", "<stdin>", pos->line, pos->col);
     vwritef(stderr, fmt, &args);
+    write_char(stderr, '\n');
     va_end(args);
     _exit(1);
 }

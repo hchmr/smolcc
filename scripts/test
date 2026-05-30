@@ -217,9 +217,12 @@ def parse_args() -> argparse.Namespace:
 
 def build_smolcc(stage: str) -> str:
     if stage == "0":
-        subprocess.run(["make"], check=True)
+        subprocess.run(["make -f stage0.mk"], shell=True, check=True)
     else:
         subprocess.run(["./scripts/bootstrap"], check=True)
+
+    use_host_cc = "1" if stage == "0" else "0"
+    subprocess.run(["make -f libc.mk HOST_CC=" + use_host_cc], shell=True, check=True)
     smolcc_path = Path("out") / stage / "smolcc"
     os.environ["SMOLCC"] = str(smolcc_path)
 

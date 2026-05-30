@@ -9,4 +9,4 @@ format:
     find . -name '*.s' | xargs ./scripts/asm-fmt -i
 
 configure-clangd:
-    make -qp | grep '^CFLAGS' | tr ' ' '\n' | tail -n +3 > compile_flags.txt
+    make -f stage0.mk -qp | grep '^CFLAGS' | tr ' ' '\n' | tail -n +3 > compile_flags.txt

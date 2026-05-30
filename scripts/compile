@@ -13,6 +13,7 @@ Options:
     -S         Only run compilation steps
     -o <file>  Specify output file
     -c         Only run compilation and assembly steps
+    -l <file>  Link with specified library
     -h         Show this help message
 EOF
 }
@@ -22,12 +23,14 @@ smolcc=${SMOLCC:-smolcc}
 output_file=
 stop_after_asm=false
 stop_after_obj=false
+link_libs=()
 
-while getopts "hSco:" opt; do
+while getopts "hSco:l:" opt; do
     case $opt in
         S) stop_after_asm=true ;;
         o) output_file="$OPTARG" ;;
         c) stop_after_obj=true ;;
+        l) link_libs+=("$OPTARG") ;;
         h) help; exit 0 ;;
         *) usage; exit 1 ;;
     esac
@@ -64,7 +67,7 @@ fi
     < "$source_file" \
     >(sed "s|<stdin>:|$source_file:|g" | ./scripts/asm-fmt) \
     2> >(sed "s|<stdin>:|$source_file:|g" >&2) \
-    > "$asm_file"
+    | ./scripts/asm-fmt > "$asm_file"
 if [[ $stop_after_asm == true ]]; then
     exit 0
 fi
@@ -74,4 +77,4 @@ if [[ $stop_after_obj == true ]]; then
     exit 0
 fi
 
-"$cc" "$obj_file" -g -o "$exe_file"
+"$cc" -nostdlib "$obj_file" -g -o "$exe_file" "${link_libs[@]}"

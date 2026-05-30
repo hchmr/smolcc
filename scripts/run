@@ -10,6 +10,7 @@ help() {
     usage
     cat <<EOF
 Options:
+    -l <file>  Link with specified library
     -h         Show this help message
 EOF
 }
@@ -21,10 +22,18 @@ arg_error() {
 }
 
 source_file=
+link_libs=()
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
-        -h|--help) help; exit 0 ;;
+        -h|--help)
+        help; exit 0 ;;
+        -l)
+            if [[ -z "${2:-}" ]]; then
+                arg_error "Option -l requires an argument"
+            fi
+            link_libs+=("$2")
+            shift 2 ;;
         --) shift; break ;;
         *)
         if [[ -z "$source_file" ]]; then
@@ -46,6 +55,6 @@ trap 'rm -rf "$build_dir"' EXIT
 
 output_file="$build_dir/a.out"
 
-./scripts/compile -o "$output_file" "$source_file"
+./scripts/compile -o "$output_file" "$source_file" "${link_libs[@]}"
 
 "$output_file" "$@"
