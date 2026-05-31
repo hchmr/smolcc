@@ -361,11 +361,6 @@ static struct ty *mk_func_ty(struct ty *ret_ty, struct ty **param_tys, int n_par
     return intern_ty(&t);
 }
 
-static struct ty *uac_ty(struct ty *t1, struct ty *t2) {
-    assert("uac_ty", is_integer_ty(t1) && is_integer_ty(t2));
-    return t1->kind < t2->kind ? t2 : t1;
-}
-
 static struct ty *get_common_ptr_ty(struct ty *t1, struct ty *t2) {
     assert("get_common_ptr_ty", is_ptr_ty(t1) && is_ptr_ty(t2));
     if (is_void_ptr(t1) || is_void_ptr(t2))
@@ -672,7 +667,7 @@ static struct expr *cast_to(struct ty *t, struct expr *e) {
 
 static void apply_ua_conv(struct expr **args) {
     assert("apply_ua_conv", is_integer_ty(args[0]->ty) && is_integer_ty(args[1]->ty));
-    struct ty *target_ty = uac_ty(args[0]->ty, args[1]->ty);
+    struct ty *target_ty = int_ty;
     args[0] = cast_to(target_ty, args[0]);
     args[1] = cast_to(target_ty, args[1]);
 }
@@ -952,18 +947,22 @@ static int peek_char() {
     return (rdbuf_len <= 0) ? EOF : rdbuf[rdbuf_pos];
 }
 
-static void next_chr() {
+static void skip_chr() {
     if (chr == '\n') {
         chr_pos.line++, chr_pos.col = 1;
     } else {
         chr_pos.col++;
     }
-    if (tok_len < MAX_TOK_LEN) {
-        tok_str[tok_len++] = chr;
-    }
     if (chr = peek_char(), chr == EOF)
         return;
     rdbuf_pos++;
+}
+
+static void next_chr() {
+    if (tok_len == MAX_TOK_LEN)
+        err_at(&chr_pos, "token too long");
+    tok_str[tok_len++] = chr;
+    skip_chr();
 }
 
 static void lex() {
@@ -972,7 +971,7 @@ static void lex() {
         if (chr == EOF) {
             tok = EOF;
         } else if (chr == ' ' || chr == '\t' || chr == '\n') {
-            next_chr();
+            skip_chr();
             continue;
         } else if (chr >= '0' && chr <= '9') {
             int n = 0;
@@ -989,7 +988,7 @@ static void lex() {
             tok = Tok_Wrd;
         } else if (chr == '\'' || chr == '"') {
             int delim = chr, len = 0;
-            next_chr();
+            skip_chr();
             while (1) {
                 if (chr == delim)
                     break;
@@ -1001,18 +1000,18 @@ static void lex() {
                     err_at(&chr_pos, "string/char literal too long");
                 int decoded = chr;
                 if (chr == '\\') {
-                    next_chr();
+                    skip_chr();
                     const char *escapes = "abfnrtv\\'\"?", *unescapes = "\a\b\f\n\r\t\v\\\'\"\?";
                     if (find_chr(escapes, chr)) {
                         decoded = unescapes[find_chr(escapes, chr) - escapes];
                     }
                 }
-                next_chr();
+                skip_chr();
                 tok_val.str[len++] = decoded;
             }
             if (delim == '\'' && len == 0)
                 err_at(&chr_pos, "empty char literal");
-            next_chr();
+            skip_chr();
             tok_val.str[len] = 0;
             tok_val.n = len;
             tok = delim == '"' ? Tok_Str : Tok_Chr;
@@ -1021,7 +1020,7 @@ static void lex() {
             next_chr();
             if (prev == '#' || prev == '/' && chr == '/') {
                 while (chr != '\n' && chr != EOF) {
-                    next_chr();
+                    skip_chr();
                 }
                 continue;
             } else if (find_chr("<>!=", prev) && chr == '=' || find_chr("&|<>+-", prev) && chr == prev
@@ -1716,6 +1715,8 @@ static void emit_place_expr(struct expr *e) {
         emit_place_expr(e->subs[0]);
         emit_int_load(e->sym->offs, 1);
         writef(stdout, "add x0, x0, x1\n");
+    } else if (e->kind == Expr_Assign || e->kind == Expr_Comma) {
+        emit_expr(e);
     } else if (e->kind == Expr_Deref) {
         emit_expr(e->subs[0]);
     } else if (e->kind == Expr_Str) {
@@ -2029,7 +2030,7 @@ int main() {
     init_tys();
 
     // lexer
-    chr_pos.line = chr_pos.col = 1;
+    chr_pos.line = 1, chr_pos.col = 0;
     next_chr();
 
     // parser
