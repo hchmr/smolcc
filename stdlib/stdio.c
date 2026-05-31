@@ -106,22 +106,17 @@ int fflush(struct file *stream) {
 }
 
 static int ffill(struct file *stream) {
-    int acc = 0;
-    while (stream->buf_len != FILE_BUF_CAP) {
-        int want = FILE_BUF_CAP - stream->buf_len;
-        int nr = read(stream->fd, stream->buf + stream->buf_len, want);
-        if (nr == -1) {
-            set_flag(stream, FFLG_ERR);
-            return EOF;
-        }
-        acc = acc + nr;
-        if (nr == 0) {
-            set_flag(stream, FFLG_EOF);
-            break;
-        }
-        stream->buf_len = stream->buf_len + nr;
+    int nr = read(stream->fd, stream->buf, FILE_BUF_CAP);
+    if (nr == -1) {
+        set_flag(stream, FFLG_ERR);
+        return EOF;
     }
-    return acc;
+    if (nr == 0) {
+        set_flag(stream, FFLG_EOF);
+        return 0;
+    }
+    stream->buf_len = nr;
+    return nr;
 }
 
 struct file *fopen(const char *fname, const char *mode) {
@@ -169,6 +164,8 @@ int fclose(struct file *stream) {
 
 int fwrite(const void *ptr, int size, int count, struct file *stream) {
     int to_write = size * count;
+    if (to_write == 0)
+        return 0;
     const char *buf = ptr;
 
     int i = 0;
@@ -186,6 +183,8 @@ int fwrite(const void *ptr, int size, int count, struct file *stream) {
 
 int fread(void *ptr, int size, int count, struct file *stream) {
     int to_read = size * count;
+    if (to_read == 0)
+        return 0;
     char *buf = ptr;
 
     int i = 0;

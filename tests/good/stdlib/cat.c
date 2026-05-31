@@ -1,6 +1,12 @@
+//# description: Concatenates two stable fixture files, including one without a final newline.
 //# mode: run
 //# exit: 0
-//# args: tests/good/stdlib/cat.c
+//# args: tests/data/text_short_first.txt tests/data/text_short_last_noeol.txt
+//# stdout: x
+//# stdout: alpha beta gamma
+//# stdout: 0123456789012345678901234567890123456789many many words here
+//# stdout: mid size
+//# stdout: z
 
 //------------------------------------------------------------------------------
 

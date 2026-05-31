@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import re
@@ -30,6 +31,7 @@ verbosity = Verbsity.NORMAL
 
 @dataclass
 class spec:
+    description: str | None
     args: str | None
     mode: str | None
     exit_code: int | None
@@ -39,15 +41,31 @@ class spec:
 
 
 def parse_directive(line: str) -> tuple[str, str] | None:
-    match = re.fullmatch(r"\s*//\s*#\s*(args|mode|exit|stderr|stdout)\s*:\s?(.*)", line)
+    match = re.fullmatch(r"\s*//\s*#\s*(description|args|mode|exit|stderr|stdout)\s*:\s?(.*)", line)
     if match is None:
         return None
     return match.group(1), match.group(2)
 
 
+def parse_output_line(path: Path, kind: str, value: str) -> str:
+    if not value.startswith('"'):
+        return value
+
+    try:
+        line = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path}: invalid {kind} directive {value!r}: {exc.msg}")
+
+    if not isinstance(line, str):
+        raise SystemExit(f"{path}: {kind} directive must decode to a string")
+
+    return line
+
+
 def read_spec(path: Path) -> spec:
     lines = path.read_text().splitlines(keepends=True)
 
+    description = None
     args = None
     mode = None
     exit_code = None
@@ -58,6 +76,8 @@ def read_spec(path: Path) -> spec:
         directive = parse_directive(raw_line.rstrip("\n"))
 
         match directive:
+            case ("description", value) if description is None:
+                description = value
             case ("args", value) if args is None:
                 args = value
             case ("mode", value) if mode is None:
@@ -67,13 +87,14 @@ def read_spec(path: Path) -> spec:
             case ("exit", value) if exit_code is None:
                 exit_code = int(value)
             case ("stderr", value):
-                stderr_parts.append(value)
+                stderr_parts.append(parse_output_line(path, "stderr", value))
             case ("stdout", value):
-                stdout_parts.append(value)
+                stdout_parts.append(parse_output_line(path, "stdout", value))
             case _:
                 body_parts.append(raw_line)
 
     return spec(
+        description=description,
         args=args,
         mode=mode,
         exit_code=exit_code,
@@ -86,13 +107,25 @@ def read_spec(path: Path) -> spec:
 def format_output(prefix: str, text: str) -> list[str]:
     if not text:
         return []
-    return [f"{prefix}{line}\n" for line in text.splitlines()]
+
+    def should_quote(line: str) -> bool:
+        if line.startswith('"'):
+            return True
+        return any(ord(ch) < 32 and ch != '\t' for ch in line)
+
+    lines: list[str] = []
+    for line in text.splitlines():
+        rendered = json.dumps(line) if should_quote(line) else line
+        lines.append(f"{prefix}{rendered}\n")
+    return lines
 
 
 def update_spec(
     path: Path, spec: spec, result: subprocess.CompletedProcess[str]
 ) -> None:
     lines: list[str] = []
+    if spec.description is not None:
+        lines.append(f"//# description: {spec.description}\n")
     if spec.mode is not None:
         lines.append(f"//# mode: {spec.mode}\n")
     if spec.args is not None:

@@ -1,10 +1,13 @@
+//# description: Uses stable text fixtures under tests/data, including punctuation-heavy input.
 //# mode: run
-//# args: -lwcL tests/good/stdlib/wc.c tests/good/stdlib/write.c tests/good/stdlib/printf.c
+//# args: -lwcL tests/data/text_short_first.txt tests/data/text_short_last_noeol.txt tests/data/blank_lines.txt tests/data/empty.txt tests/data/c_like_punct.txt
 //# exit: 0
-//# stdout:      212     622    5258      91 tests/good/stdlib/wc.c
-//# stdout:       12      39     222      53 tests/good/stdlib/write.c
-//# stdout:      185     853    6134      66 tests/good/stdlib/printf.c
-//# stdout:      409    1514   11614      91 total
+//# stdout:        2       5      59      40 tests/data/text_short_first.txt
+//# stdout:        2       7      31      20 tests/data/text_short_last_noeol.txt
+//# stdout:        3       3      16      10 tests/data/blank_lines.txt
+//# stdout:        0       0       0       0 tests/data/empty.txt
+//# stdout:        2       5      80      47 tests/data/c_like_punct.txt
+//# stdout:        9      20     186      47 total
 
 //------------------------------------------------------------------------------
 //- libc

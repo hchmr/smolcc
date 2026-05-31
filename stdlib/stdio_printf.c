@@ -303,10 +303,21 @@ static int fmt_str(struct file *stream, struct fmt_spec *spec, const char *s) {
 }
 
 static int fmt_chr(struct file *stream, struct fmt_spec *spec, char c) {
-    char s[2];
-    s[0] = c;
-    s[1] = 0;
-    return fmt_str(stream, spec, s);
+    int pad_width = spec->min_width > 1 ? spec->min_width - 1 : 0;
+    int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;
+
+    if (!pad_right) {
+        if (fill(stream, ' ', pad_width) == -1)
+            return -1;
+    }
+    if (fputc(c, stream) == EOF)
+        return -1;
+    if (pad_right) {
+        if (fill(stream, ' ', pad_width) == -1)
+            return -1;
+    }
+
+    return 1 + pad_width;
 }
 
 static int fmt_ptr(struct file *stream, void *p) {
