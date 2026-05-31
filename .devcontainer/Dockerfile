@@ -15,6 +15,7 @@ RUN apt-get update \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
+        clang-format \
         clangd \
         curl \
         fd-find \
@@ -22,12 +23,13 @@ RUN apt-get update \
         just \
         lldb \
         man-db \
+        manpages-dev \
+        manpages-posix-dev \
         python3 \
         python3-pip \
         ripgrep \
         sudo \
         zsh \
-        clang-format \
     && rm -rf /var/lib/apt/lists/*
 
 RUN usermod -s /usr/bin/zsh ubuntu \

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+script_dir=$(dirname "$(readlink -f "$0")")
+repo_dir=$(readlink -f "$script_dir/..")
+
+usage() {
+    echo "Usage: $0 [options] <install-dir>"
+    exit 1
+}
+
+help() {
+    echo "Options:"
+    echo "  -s  Which stage's compiler to install (default: stage2)"
+    echo "  -h  Show this help message and exit"
+    exit 0
+}
+
+stage="stage2"
+
+while getopts "s:h" opt; do
+    case $opt in
+        s) stage="$OPTARG" ;;
+        h) help ;;
+        *) usage ;;
+    esac
+done
+
+shift $((OPTIND - 1))
+
+if [ "$#" -ne 1 ]; then
+    usage
+fi
+
+install_dir="$1"
+
+mkdir -p "$install_dir"
+
+cp "$script_dir/driver" "$install_dir/smolcc"
+cp "$script_dir/asm-fmt" "$install_dir/asm-fmt"
+cp "$repo_dir/build/$stage/smolcc1" "$install_dir/smolcc1"
+
+commit=$(git -C "$repo_dir" rev-parse --short HEAD)
+dirty=
+if [[ -n $(git -C "$repo_dir" status --porcelain) ]]; then
+    dirty=-dirty
+fi
+build_info="smolcc $stage (commit $commit$dirty)"
+echo "$build_info" > "$install_dir/smolcc.version"

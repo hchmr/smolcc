@@ -2,6 +2,8 @@
 
 set -Eeuo pipefail
 
+script_dir=$(dirname "$(readlink -f "$0")")
+
 usage() {
     echo "Usage: $0 [options] <file.c>"
 }
@@ -13,24 +15,37 @@ Options:
     -S         Only run compilation steps
     -o <file>  Specify output file
     -c         Only run compilation and assembly steps
-    -l <file>  Link with specified library
+    -v         Show version information
     -h         Show this help message
 EOF
 }
 
-cc=${CC:-cc}
-smolcc=${SMOLCC:-smolcc}
+
+version_info=$script_dir/smolcc.version
+smolcc1=$script_dir/smolcc1
+asm_fmt=$script_dir/asm-fmt
+crt_o=$script_dir/../lib/crt.o
+libc_a=$script_dir/../lib/libc.a
+
+version() {
+    if [[ -f "$version_info" ]]; then
+        cat "$version_info"
+    else
+        echo "smolcc (version information not found)"
+    fi
+}
+
+cc=cc
 output_file=
 stop_after_asm=false
 stop_after_obj=false
-link_libs=()
 
-while getopts "hSco:l:" opt; do
+while getopts "hSco:l:v" opt; do
     case $opt in
         S) stop_after_asm=true ;;
         o) output_file="$OPTARG" ;;
         c) stop_after_obj=true ;;
-        l) link_libs+=("$OPTARG") ;;
+        v) version; exit 0 ;;
         h) help; exit 0 ;;
         *) usage; exit 1 ;;
     esac
@@ -63,11 +78,11 @@ else
     exe_file="${output_file}"
 fi
 
-"$smolcc" \
+"$smolcc1" \
     < "$source_file" \
-    >(sed "s|<stdin>:|$source_file:|g" | ./scripts/asm-fmt) \
     2> >(sed "s|<stdin>:|$source_file:|g" >&2) \
-    | ./scripts/asm-fmt > "$asm_file"
+    | sed "s|<stdin>:|$source_file:|g" \
+    | "$asm_fmt" > "$asm_file"
 if [[ $stop_after_asm == true ]]; then
     exit 0
 fi
@@ -77,4 +92,4 @@ if [[ $stop_after_obj == true ]]; then
     exit 0
 fi
 
-"$cc" -nostdlib "$obj_file" -g -o "$exe_file" "${link_libs[@]}"
+"$cc" -nostdlib "$crt_o" "$obj_file" -g -o "$exe_file" "$libc_a"

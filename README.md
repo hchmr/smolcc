@@ -33,3 +33,9 @@ Semantic analysis follows C semantics fairly closely, with some simplifications.
 Code generation is basically the minimum viable solution: direct and mechanical. The compiler uses only a small number of registers and pushes intermediate values to the stack. Parameters are passed in x0–x7, and return values are placed in x0. This naturally limits functions to eight parameters and scalar values only, and matches a subset of the AArch64 procedure call standard. Variadic functions are supported through the same mechanism.
 
 Memory management is handled by a bump allocator backed by a statically allocated arena. Types and strings are interned both to reduce memory usage and to make comparisons cheap.
+
+## Standard Library and Compiler Driver
+
+A small companion library provides a minimal subset of the C standard library. It is not used in the compiler proper, but is used by the test suite. This standard library also serves as a place to experiment with low-level C library code in the same minimal environment as the compiler. The focus is not a full libc implementation, only a small set of useful functions, currently centered on parts of stdio.h, stdlib.h, and string.h.
+
+The core compiler program is not very easy to use on its own, since it reads source code from standard input and writes assembly to standard output. A simple compiler driver is included for convenience. It provides a few command-line options and handles the full compilation pipeline, including running the host toolchain’s assembler and linker to produce an executable. The driver also links in the standard library.

@@ -1,3 +1,82 @@
+//# mode: run
+//# exit: 0
+//# stdout: --- Basics & argument order ---
+//# stdout: Literal string with no args
+//# stdout: Escape chars: \n=
+//# stdout: , \t=	, percent=%
+//# stdout: Two integers: x=420 y=71234
+//# stdout: Mixed types: hello 123 A
+//# stdout: Null string: |(null)|
+//# stdout:
+//# stdout: --- Decimal edge cases ---
+//# stdout: Zero:         |0|
+//# stdout: One:          |1|
+//# stdout: Minus one:    |-1|
+//# stdout: Max int (32): |2147483647|
+//# stdout: Min int (32): |-2147483648|
+//# stdout: %i specifier: |123|
+//# stdout:
+//# stdout: --- Hex & octal ---
+//# stdout: Hex zero:     |0|
+//# stdout: Hex upper:    |abcdef|
+//# stdout: Hex lower:    |ABCDEF|
+//# stdout: Hex positive: |7b|
+//# stdout: Hex minus one:|ffffffff|
+//# stdout: Hex min int:  |80000000|
+//# stdout: Oct zero:     |0|
+//# stdout: Oct positive: |173|
+//# stdout: Oct minus one:|37777777777|
+//# stdout: Oct min int:  |20000000000|
+//# stdout:
+//# stdout: --- Sign Flags ('+' and ' ') ---
+//# stdout: ' ' pos:  | 123|
+//# stdout: ' ' neg:  |-123|
+//# stdout: '+' pos:  |+123|
+//# stdout: '+' neg:  |-123|
+//# stdout: '+' zero: |+0|
+//# stdout: ' ' zero: | 0|
+//# stdout:
+//# stdout: --- Width, padding & alignment ---
+//# stdout: Right padding:      |       123|
+//# stdout: Left padding (-):   |123       |
+//# stdout: Zero padding (0):   |0000000123|
+//# stdout: Plus + width:       |      +123|
+//# stdout: Plus + zero pad:    |+000000123|
+//# stdout: Left adj + '0':     |123       |
+//# stdout: Left adj + '+':     |+123      |
+//# stdout: Left adj + ' ':     | 123      |
+//# stdout: Left adj + '0 ':    | 123      |
+//# stdout:
+//# stdout: --- Alternate form flags (#) ---
+//# stdout: Alt hex zero: |0|
+//# stdout: Alt hex pos:  |0xff|
+//# stdout: Alt hex upper:|0XFF|
+//# stdout: Alt hex neg:  |0xffffffff|
+//# stdout: Alt oct zero: |0|
+//# stdout: Alt oct pos:  |010|
+//# stdout:
+//# stdout: --- Strings and characters ---
+//# stdout: Normal str:   |test|
+//# stdout: Width str:    |      test|
+//# stdout: Left adj str: |test      |
+//# stdout: Char normal:  |X|
+//# stdout: Char width:   |    X|
+//# stdout:
+//# stdout: --- pointer printing ---
+//# stdout: High ptr: |0xc5f467a193b28ed|
+//# stdout: Low ptr:  |0xfe63|
+//# stdout: Null ptr: |(nil)|
+//# stdout:
+//# stdout: --- Literal percent sign (%) ---
+//# stdout: Percent: |%|
+//# stdout: Multiple: |%%%|
+//# stdout: Confusing: |%%s%s%|
+//# stdout: Width + percent: |%|
+//# stdout:
+//# stdout: --- %n specifier ---
+//# stdout: Hello World!
+//# stdout: 5=5 11=11
+
 extern int printf(const char *format, ...);
 
 int main() {
@@ -80,13 +159,12 @@ int main() {
     //= %p SPECIFIER
 
     printf("\n--- pointer printing ---\n");
-    // void *p1 = (void *)0xfedcba9876543210;
-    int lower32 = 1985229328;
-    int upper32 = 2147483647;
-    struct { int low; int high; } bits;
-    bits.low = lower32;
-    bits.high = upper32;
-    printf("High ptr: |%p|\n", *(void**)&bits);
+    // void *p1 = (void *)0xc5f467a193b28ed;
+    void *p;
+    ((int *)&p)[0] = 423307501; // lower
+    ((int *)&p)[1] = 207570554; // upper
+    printf("High ptr: |%p|\n", p);
+    printf("Low ptr:  |%p|\n", (void*) 65123);
     printf("Null ptr: |%p|\n", (void *)0);
 
     //= %% SPECIFIER

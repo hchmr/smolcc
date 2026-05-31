@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import asyncio
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -9,12 +10,22 @@ import shlex
 import subprocess
 import sys
 import tempfile
-
+from typing import TextIO
+import enum
 
 GREEN = "\033[32m"
 RED = "\033[31m"
 YELLOW = "\033[33m"
 RESET = "\033[0m"
+
+
+class Verbsity(enum.IntEnum):
+    NORMAL = 0
+    VERBOSE = 1
+    DEBUG = 2
+
+
+verbosity = Verbsity.NORMAL
 
 
 @dataclass
@@ -107,25 +118,74 @@ def default_exit_for(path: Path) -> int:
     return 1 if "bad" in path.parts else 0
 
 
+async def live_output(proc: asyncio.subprocess.Process):
+    assert proc.stdout and proc.stderr
+
+    # Helper function to read a stream and write to terminal in real-time
+    async def stream_and_capture(
+        reader: asyncio.StreamReader, terminal_stream: TextIO
+    ) -> str:
+        chunks: list[str] = []
+        while line := await reader.readline():
+            line = line.decode()
+            terminal_stream.write(line)
+            terminal_stream.flush()
+            chunks.append(line)
+        return "".join(chunks)
+
+    # Runs both stream readers concurrently using the event loop
+    stdout_task = asyncio.create_task(stream_and_capture(proc.stdout, sys.stdout))
+    stderr_task = asyncio.create_task(stream_and_capture(proc.stderr, sys.stderr))
+
+    # Wait for everything to finish
+    return await asyncio.gather(stdout_task, stderr_task)
+
+
+async def run_async(
+    args: list[str], check: bool = False
+) -> subprocess.CompletedProcess[str]:
+    if verbosity >= Verbsity.VERBOSE:
+        print("+", shlex.join(args))
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    if verbosity >= Verbsity.DEBUG:
+        stdout_str, stderr_str = await live_output(proc)
+        await proc.wait()
+    else:
+        stdout_bytes, stderr_bytes = await proc.communicate()
+        stdout_str, stderr_str = stdout_bytes.decode(), stderr_bytes.decode()
+
+    assert proc.returncode is not None
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode, args, stdout_str, stderr_str
+        )
+
+    return subprocess.CompletedProcess(args, proc.returncode, stdout_str, stderr_str)
+
+
+def run(args: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+    return asyncio.run(run_async(args, check=check))
+
+
 def run_command(
     path: Path, mode: str, args: list[str]
 ) -> subprocess.CompletedProcess[str]:
-    if mode == "run":
-        return subprocess.run(
-            ["./scripts/run", str(path), "--", *args],
-            capture_output=True,
-            text=True,
-        )
-
-    with tempfile.TemporaryDirectory(
-        prefix="smolcc-test-", dir=os.environ.get("TMPDIR") or None
-    ) as temp_dir:
-        output_path = Path(temp_dir) / "a.o"
-        return subprocess.run(
-            ["./scripts/compile", "-c", "-o", str(output_path), str(path)],
-            capture_output=True,
-            text=True,
-        )
+    match mode:
+        case "compile-only":
+            with tempfile.TemporaryDirectory(
+                prefix="smolcc-test-", dir=os.environ.get("TMPDIR") or None
+            ) as temp_dir:
+                output_path = Path(temp_dir) / "a.o"
+                return run(["smolcc", "-c", "-o", str(output_path), str(path)])
+        case "run":
+            return run(["scripts/run", str(path), "--", *args])
+        case _:
+            raise ValueError(f"unsupported mode: {mode}")
 
 
 def collect_case_groups(paths: list[Path]) -> list[list[Path]]:
@@ -140,6 +200,8 @@ def collect_case_groups(paths: list[Path]) -> list[list[Path]]:
 
 def run_case(path: Path, update: bool) -> bool:
     print(f"==> {path} ", end="", flush=True)
+    if verbosity >= Verbsity.VERBOSE:
+        print()
 
     spec = read_spec(path)
     mode = spec.mode or "compile-only"
@@ -155,8 +217,8 @@ def run_case(path: Path, update: bool) -> bool:
     if want_exit is None:
         want_exit = default_exit_for(path)
 
-    actual_stderr = result.stderr.rstrip('\n')
-    actual_stdout = result.stdout.rstrip('\n')
+    actual_stderr = result.stderr.rstrip("\n")
+    actual_stdout = result.stdout.rstrip("\n")
     stderr_failure, stdout_failure = None, None
     if spec.stderr is not None and actual_stderr != spec.stderr:
         stderr_failure = (spec.stderr, actual_stderr)
@@ -171,14 +233,14 @@ def run_case(path: Path, update: bool) -> bool:
 
         if stderr_failure:
             expected, actual = stderr_failure
-            print_text_block(f"Expected stderr", expected)
-            print_text_block(f"Actual stderr", actual)
+            print_text_block("Expected stderr", expected)
+            print_text_block("Actual stderr", actual)
         else:
-            print_text_block(f"stderr", actual_stderr)
+            print_text_block("stderr", actual_stderr)
         if stdout_failure:
             expected, actual = stdout_failure
-            print_text_block(f"Expected stdout", expected)
-            print_text_block(f"Actual stdout", actual)
+            print_text_block("Expected stdout", expected)
+            print_text_block("Actual stdout", actual)
         return False
 
     print(f"{GREEN}OK{RESET}")
@@ -188,7 +250,9 @@ def run_case(path: Path, update: bool) -> bool:
 def run_group(paths: list[Path], update: bool) -> int:
     failures = 0
     for path in paths:
-        if path.exists() and not run_case(path, update):
+        if not path.exists():
+            print(f"{YELLOW}SKIP{RESET} {path} (file not found)")
+        elif not run_case(path, update):
             failures += 1
     return failures
 
@@ -208,34 +272,59 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=["0", "1", "2"],
-        default="2",
-        help="which stage's compiler to use (default: 2)",
+        choices=["stage0", "stage1", "stage2"],
+        help="which compiler stage to test (default: stage2)",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="skip building the compiler",
+    )
+    parser.add_argument(
+        "--verbosity",
+        choices=["normal", "verbose", "debug"],
+        default="normal",
+        help="set the verbosity level of test output (default: normal)",
+    )
+
+    args = parser.parse_args()
+    if args.stage and args.no_build:
+        print("error: --stage and --no-build cannot be used together", file=sys.stderr)
+        sys.exit(1)
+
+    args.stage = args.stage or "stage2"
+
+    global verbosity
+    verbosity = {
+        "normal": Verbsity.NORMAL,
+        "verbose": Verbsity.VERBOSE,
+        "debug": Verbsity.DEBUG,
+    }[args.verbosity]
+
+    return args
 
 
-def build_smolcc(stage: str) -> str:
-    if stage == "0":
-        subprocess.run(["make -f stage0.mk"], shell=True, check=True)
-    else:
-        subprocess.run(["./scripts/bootstrap"], check=True)
-
-    use_host_cc = "1" if stage == "0" else "0"
-    subprocess.run(["make -f libc.mk HOST_CC=" + use_host_cc], shell=True, check=True)
-    smolcc_path = Path("out") / stage / "smolcc"
-    os.environ["SMOLCC"] = str(smolcc_path)
+def build_smolcc(args: argparse.Namespace) -> str:
+    if not args.no_build:
+        run(["make", "compiler", f"STAGE={args.stage}"], check=True)
+    smolcc_path = Path("build") / "bin" / "smolcc"
+    return str(smolcc_path)
 
 
 def main() -> int:
     args = parse_args()
 
-    build_smolcc(args.stage)
+    smolcc = build_smolcc(args)
+    os.environ["PATH"] += os.pathsep + str(Path(smolcc).parent)
 
-    failures = sum(
-        run_group(group, args.update)
-        for group in collect_case_groups(args.paths)
-    )
+    print("\n===> Running tests...\n")
+
+    groups = collect_case_groups(args.paths)
+    if not groups or not any(groups):
+        print("No test cases found.")
+        return 0
+
+    failures = sum(run_group(group, args.update) for group in groups)
 
     if args.update:
         print("\nExpectations updated.")

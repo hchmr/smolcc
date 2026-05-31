@@ -3,16 +3,6 @@
 
 #include <stdarg.h>
 
-extern int open(const char *pathname, int flags, int mode);
-extern int close(int fd);
-extern int write(int fd, const void *buf, int nbytes);
-extern int read(int fd, void *buf, int nbytes);
-
-extern int strcmp(const char *s1, const char *s2);
-extern int strlen(const char *s);
-extern void *memset(void *s, int c, int n);
-
-enum { EOF = -1 };
 enum { NULL = 0 };
 
 enum {
@@ -23,6 +13,15 @@ enum {
     O_TRUNC = 512,
     O_APPEND = 1024,
 };
+
+extern int open(const char *pathname, int flags, int mode);
+extern int close(int fd);
+extern int write(int fd, const void *buf, int nbytes);
+extern int read(int fd, void *buf, int nbytes);
+
+extern int strcmp(const char *s1, const char *s2);
+extern int strlen(const char *s);
+extern void *memset(void *s, int c, int n);
 
 //==============================================================================
 //= impl
@@ -75,6 +74,8 @@ static void set_flag(struct file *stream, int flag) {
 
 //==============================================================================
 //= core
+
+enum { EOF = -1 };
 
 struct file *stdin, *stdout, *stderr;
 
@@ -216,6 +217,21 @@ int fputc(int c, struct file *stream) {
         return EOF;
     }
     return c;
+}
+
+int putchar(int c) {
+    return fputc(c, stdout);
+}
+
+int puts(const char *s) {
+    int len = strlen(s);
+    if (fwrite(s, 1, len, stdout) != len) {
+        return EOF;
+    }
+    if (fputc('\n', stdout) == EOF) {
+        return EOF;
+    }
+    return 0;
 }
 
 //==============================================================================

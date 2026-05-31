@@ -1,4 +1,4 @@
-/out/
+/build/
 .DS_Store
 compile_flags.txt
 .vscode/

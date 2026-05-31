@@ -28,8 +28,8 @@ static void prepend(char **dst, char c) {
     **dst = c;
 }
 
-static char *int_to_dec(int n, char buf[MAX_INT_LEN]) {
-    char *p = buf + MAX_INT_LEN;
+static char *int_to_dec(int n, char *buf, int buf_len) {
+    char *p = buf + buf_len;
 
     int neg, d;
     neg = n < 0;
@@ -57,11 +57,13 @@ static char *int_to_dec(int n, char buf[MAX_INT_LEN]) {
     return p;
 }
 
-static char *int_to_hex(int n, char buf[MAX_INT_LEN], int uppercase) {
+static char *int_to_hex(int n, char *buf, int buf_len, int uppercase) {
     const char *alphabet = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
-    char *p = buf + MAX_INT_LEN;
+    char *p = buf + buf_len;
 
     for (int i = 0; i < 8; i++) {
+        if (i == buf_len)
+            return 0;
         int d = n & 15;
         n = (n >> 4) & 268435455; // logical right shift by 4
         prepend(&p, alphabet[d]);
@@ -71,10 +73,12 @@ static char *int_to_hex(int n, char buf[MAX_INT_LEN], int uppercase) {
     return p;
 }
 
-static char *int_to_oct(int n, char buf[MAX_INT_LEN]) {
-    char *p = buf + MAX_INT_LEN;
+static char *int_to_oct(int n, char *buf, int buf_len) {
+    char *p = buf + buf_len;
 
     for (int i = 0; i < 11; i++) {
+        if (i == buf_len)
+            return 0;
         int d = n & 7;
         n = (n >> 3) & 536870911; // logical right shift by 3
         prepend(&p, '0' + d);
@@ -228,11 +232,11 @@ static int fmt_int(struct file *stream, struct fmt_spec *spec, int n) {
     char *num_str_end = num_buf + MAX_INT_LEN;
     char *num_str;
     if (spec->base == 10) {
-        num_str = int_to_dec(n, num_buf);
+        num_str = int_to_dec(n, num_buf, MAX_INT_LEN);
     } else if (spec->base == 16) {
-        num_str = int_to_hex(n, num_buf, spec->flags & FMT_FLAGS_UPPER_HEX);
+        num_str = int_to_hex(n, num_buf, MAX_INT_LEN, spec->flags & FMT_FLAGS_UPPER_HEX);
     } else if (spec->base == 8) {
-        num_str = int_to_oct(n, num_buf);
+        num_str = int_to_oct(n, num_buf, MAX_INT_LEN);
     } else {
         num_str = num_str_end;  // empty string
     }
@@ -306,30 +310,31 @@ static int fmt_chr(struct file *stream, struct fmt_spec *spec, char c) {
 }
 
 static int fmt_ptr(struct file *stream, void *p) {
+    enum {
+        PTR_SIZE = sizeof(void *),
+        N_DIGITS = PTR_SIZE * 2,
+        PTR_STR_LEN = 2 + N_DIGITS
+    };
+
     if (p == 0) {
         return fmt_lit(stream, "(nil)", 5);
     }
 
-    char bytes[8];
-    *(void **)bytes = p;
-
-    struct fmt_spec spec;
-    memset(&spec, 0, sizeof(struct fmt_spec));
-    spec.type = FMT_INT;
-    spec.base = 16;
-    spec.flags = FMT_FLAGS_ZEROPAD;
-    spec.min_width = 2;
-
-    int nw = 0;
-    if (fwrite("0x", 1, 2, stream) < 2)
-        return -1;
-    nw = 2;
-    for (int i = 7; i >= 0; i--) {
-        if (fmt_int(stream, &spec, bytes[i]) == -1)
-            return -1;
-        nw = nw + 2;
+    char buf[PTR_STR_LEN];
+    char *beg = buf + PTR_STR_LEN, *end = beg;
+    for (int i = 0; i < PTR_SIZE; i++) {
+        int byte = ((char *)&p)[i] & 255;
+        for (int j = 0; j < 2; j++) {
+            int d = (byte >> (4 * j)) & 15;
+            prepend(&beg, "0123456789abcdef"[d]);
+        }
     }
-    return nw;
+    while (beg != end - 1 && *beg == '0') {
+        beg++;
+    }
+    prepend(&beg, 'x');
+    prepend(&beg, '0');
+    return fmt_lit(stream, beg, end - beg);
 }
 
 // must use va_list* because va_list is an aggregate

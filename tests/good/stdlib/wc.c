@@ -1,10 +1,10 @@
 //# mode: run
-//# args: -lwcL tests/good/extern/wc.c tests/good/extern/write.c tests/good/extern/printf.c
+//# args: -lwcL tests/good/stdlib/wc.c tests/good/stdlib/write.c tests/good/stdlib/printf.c
 //# exit: 0
-//# stdout:      211     616    5198      92 tests/good/extern/wc.c
-//# stdout:       12      39     222      54 tests/good/extern/write.c
-//# stdout:       10      26     166      44 tests/good/extern/printf.c
-//# stdout:      233     681    5586      92 total
+//# stdout:      212     622    5258      91 tests/good/stdlib/wc.c
+//# stdout:       12      39     222      53 tests/good/stdlib/write.c
+//# stdout:      185     853    6134      66 tests/good/stdlib/printf.c
+//# stdout:      409    1514   11614      91 total
 
 //------------------------------------------------------------------------------
 //- libc
@@ -121,12 +121,13 @@ void get_stats(struct File *stream, struct Stats *stats) {
         if (curr_char == '\n') {
             stats->bytes = stats->bytes + curr_len;
             stats->lines = stats->lines + 1;
-            stats->max_len = int_max(stats->max_len, curr_len);
+            stats->max_len = int_max(stats->max_len, curr_len - 1);
             curr_len = 0;
         }
     }
 
     stats->bytes = stats->bytes + curr_len;
+    stats->max_len = int_max(stats->max_len, curr_len);
 }
 
 void print_row(int options, struct Stats *stats, const char *label) {
