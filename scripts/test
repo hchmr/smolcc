@@ -23,13 +23,13 @@ RESET = "\033[0m"
 SMOLCC_PATH = Path("build") / "dist" / "bin" / "smolcc"
 
 
-class Verbsity(enum.IntEnum):
+class Verbosity(enum.IntEnum):
     NORMAL = 0
     VERBOSE = 1
     DEBUG = 2
 
 
-verbosity = Verbsity.NORMAL
+verbosity = Verbosity.NORMAL
 
 
 @dataclass
@@ -182,7 +182,7 @@ async def live_output(proc: asyncio.subprocess.Process):
 async def run_async(
     args: list[str], check: bool = False
 ) -> subprocess.CompletedProcess[str]:
-    if verbosity >= Verbsity.VERBOSE:
+    if verbosity >= Verbosity.VERBOSE:
         print("+", shlex.join(args))
 
     proc = await asyncio.create_subprocess_exec(
@@ -190,7 +190,7 @@ async def run_async(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    if verbosity >= Verbsity.DEBUG:
+    if verbosity >= Verbosity.DEBUG:
         stdout_str, stderr_str = await live_output(proc)
         await proc.wait()
     else:
@@ -238,7 +238,7 @@ def collect_case_groups(paths: list[Path]) -> list[list[Path]]:
 
 def run_case(path: Path, update: bool) -> bool:
     print(f"==> {path} ", end="", flush=True)
-    if verbosity >= Verbsity.VERBOSE:
+    if verbosity >= Verbosity.VERBOSE:
         print()
 
     spec = read_spec(path)
@@ -334,9 +334,9 @@ def parse_args() -> argparse.Namespace:
 
     global verbosity
     verbosity = {
-        "normal": Verbsity.NORMAL,
-        "verbose": Verbsity.VERBOSE,
-        "debug": Verbsity.DEBUG,
+        "normal": Verbosity.NORMAL,
+        "verbose": Verbosity.VERBOSE,
+        "debug": Verbosity.DEBUG,
     }[args.verbosity]
 
     return args
