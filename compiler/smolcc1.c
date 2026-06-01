@@ -22,7 +22,8 @@ static void write_str(int fd, const char *s) {
 }
 
 static void write_char(int fd, int c) {
-    write(fd, &c, 1);
+    char ch = c;
+    write(fd, &ch, 1);
 }
 
 static void write_int(int fd, int n) {
@@ -136,7 +137,7 @@ static struct string {
 
 static struct string *intern(const char *s, int len) {
     for (struct string *str = strings; str; str = str->next)
-        if (str_eq(str->chars, s))
+        if (len == str->len && str_eq(str->chars, s))
             return str;
     struct string *mk_str = alloc(sizeof(struct string));
     mk_str->chars = mem_clone((void *)s, len + 1);
@@ -1001,10 +1002,10 @@ static void lex() {
                 int decoded = chr;
                 if (chr == '\\') {
                     skip_chr();
-                    const char *escapes = "abfnrtv\\'\"?", *unescapes = "\a\b\f\n\r\t\v\\\'\"\?";
-                    if (find_chr(escapes, chr)) {
-                        decoded = unescapes[find_chr(escapes, chr) - escapes];
-                    }
+                    const char *escapes = "abfnrtv\\'\"?0", *unescapes = "\a\b\f\n\r\t\v\\\'\"\?\0";
+                    if (!find_chr(escapes, chr))
+                        err_at(&chr_pos, "unknown escape sequence");
+                    decoded = unescapes[find_chr(escapes, chr) - escapes];
                 }
                 skip_chr();
                 tok_val.str[len++] = decoded;
@@ -1384,6 +1385,9 @@ static struct ty *p_struct() {
     int is_def = at("{");
     struct sym *sym = is_def ? 0 : lookup(1, name);
 
+    if (!name && !is_def)
+        err_at(&name_pos, "anonymous struct must be a definition");
+
     if (is_def || !sym) {
         sym = declare(&name_pos, 0, Sym_Struct, 0, name, 0, is_def);
         if (eat("{")) {
@@ -1396,9 +1400,6 @@ static struct ty *p_struct() {
             sym->size = align_up(sym->size, sym->align);
         }
     }
-
-    if (!name && !is_def)
-        err_at(&name_pos, "anonymous struct must be a definition");
 
     return sym->ty;
 }
@@ -2031,7 +2032,7 @@ int main() {
 
     // lexer
     chr_pos.line = 1, chr_pos.col = 0;
-    next_chr();
+    skip_chr();
 
     // parser
     lex();
