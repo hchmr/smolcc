@@ -1,5 +1,7 @@
 # smolcc
 
+[![CI](https://github.com/hchmr/smolcc/actions/workflows/ci.yml/badge.svg)](https://github.com/hchmr/smolcc/actions/workflows/ci.yml)
+
 A small self-hosting C compiler for a subset of C, targeting `aarch64-unknown-linux`, implemented in roughly 2k lines of code.
 
 ## Features

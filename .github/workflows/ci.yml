@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: '*'
+
+jobs:
+  compiler:
+    name: CI for compiler
+
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Bootstrap
+      run: make compiler
+
+    - name: Test
+      run: make test
