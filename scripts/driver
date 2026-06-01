@@ -2,7 +2,17 @@
 
 set -Eeuo pipefail
 
+cc="${CC:-cc}"
 script_dir=$(dirname "$(readlink -f "$0")")
+install_prefix="$(dirname "$script_dir")"
+lib_dir="$install_prefix/lib/smolcc"
+libexec_dir="$install_prefix/libexec/smolcc"
+
+version_info=$lib_dir/smolcc.version
+smolcc1=$libexec_dir/smolcc1
+asm_fmt=$libexec_dir/asm-fmt
+crt_o=$lib_dir/crt.o
+libc_a=$lib_dir/libc.a
 
 usage() {
     echo "Usage: $0 [options] <file.c>"
@@ -12,53 +22,103 @@ help() {
     usage
     cat <<EOF
 Options:
-    -S         Only run compilation steps
-    -o <file>  Specify output file
-    -c         Only run compilation and assembly steps
-    -v         Show version information
-    -h         Show this help message
+    -S           Only run compilation steps
+    -o <file>    Specify output file
+    -c           Suppress linking step
+    -v           Use verbose output / show version information
+    -nostdlib    Don't link against the C runtime
+    -h | --help  Show this help message
 EOF
 }
 
+arg_error() {
+    echo "Error: $1" >&2
+    usage
+    exit 1
+}
 
-version_info=$script_dir/smolcc.version
-smolcc1=$script_dir/smolcc1
-asm_fmt=$script_dir/asm-fmt
-crt_o=$script_dir/../lib/crt.o
-libc_a=$script_dir/../lib/libc.a
+arg_val() {
+    [[ $# -gt 2 || -z "$2" || "$2" =~ ^- ]] && arg_error "Option $1 requires an argument"
+    echo "$2"
+}
 
 version() {
     if [[ -f "$version_info" ]]; then
         cat "$version_info"
     else
-        echo "smolcc (version information not found)"
+        echo "smolcc (unknown version)"
     fi
 }
 
-cc=cc
+run() {
+    if [[ "$verbose" == true ]]; then
+        echo "$*" >&2
+    fi
+    "$@"
+}
+
+compile() {
+    if [[ $# -ne 3 || $2 != "-o" ]]; then
+        arg_error "Invalid arguments to compile: $*"
+    fi
+
+    exec 3> >(sed "s|<stdin>:|$1:|g" >&2)
+    sed_pid=$!
+
+    "$smolcc1" <"$1" 2>&3 |
+        sed "s|<stdin>:|$1:|g" |
+        "$asm_fmt" >"$3"
+
+    exec 3>&-
+    wait "$sed_pid"
+}
+
 output_file=
 stop_after_asm=false
 stop_after_obj=false
+no_stdlib=false
+source_file=
+verbose=false
 
-while getopts "hSco:l:v" opt; do
-    case $opt in
-        S) stop_after_asm=true ;;
-        o) output_file="$OPTARG" ;;
-        c) stop_after_obj=true ;;
-        v) version; exit 0 ;;
-        h) help; exit 0 ;;
-        *) usage; exit 1 ;;
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    -S) stop_after_asm=true ;;
+    -o)
+        if [[ -z "$2" ]]; then
+            arg_error "Option -o requires an argument"
+        fi
+        output_file="$2"
+        shift
+        ;;
+    -c) stop_after_obj=true ;;
+    -v) verbose=true ;;
+    -h | --help)
+        help
+        exit 0
+        ;;
+    -nostdlib) no_stdlib=true ;;
+    -*) arg_error "Unknown option: $1" ;;
+    *)
+        if [[ -z "$source_file" ]]; then
+            source_file="$1"
+        else
+            arg_error "Unexpected argument: $1"
+        fi
+        ;;
     esac
+    shift
 done
 
-shift $((OPTIND - 1))
-
-if [[ $# -ne 1 ]]; then
-    usage
-    exit 1
+if [[ "$verbose" == true ]]; then
+    version
 fi
 
-source_file="$1"
+if [[ -z "$source_file" ]]; then
+    if [[ "$verbose" == true ]]; then
+        exit 0
+    fi
+    arg_error "No input file specified"
+fi
 
 if [[ -z "$output_file" ]]; then
     asm_file="${source_file%.c}.s"
@@ -78,18 +138,25 @@ else
     exe_file="${output_file}"
 fi
 
-"$smolcc1" \
-    < "$source_file" \
-    2> >(sed "s|<stdin>:|$source_file:|g" >&2) \
-    | sed "s|<stdin>:|$source_file:|g" \
-    | "$asm_fmt" > "$asm_file"
+run compile "$source_file" -o "$asm_file"
 if [[ $stop_after_asm == true ]]; then
     exit 0
 fi
 
-"$cc" "$asm_file" -g -c -o "$obj_file"
+run "$cc" "$asm_file" -g -c -o "$obj_file"
 if [[ $stop_after_obj == true ]]; then
     exit 0
 fi
 
-"$cc" -nostdlib "$crt_o" "$obj_file" -g -o "$exe_file" "$libc_a"
+objs=()
+if [[ $no_stdlib == false ]]; then
+    objs+=("$crt_o")
+fi
+objs+=("$obj_file")
+
+libs=()
+if [[ $no_stdlib == false ]]; then
+    libs+=("$libc_a")
+fi
+
+run "$cc" -nostdlib "${objs[@]}" -g -o "$exe_file" "${libs[@]}"

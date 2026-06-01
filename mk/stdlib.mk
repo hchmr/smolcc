@@ -1,3 +1,5 @@
+SMOLCC ?= $(error "variable not set: SMOLCC")
+
 ### Inputs
 
 SRC_DIR = stdlib
@@ -21,8 +23,8 @@ CRT = $(OUT_DIR)/crt.o
 
 ### Tools
 
-SMOLCC ?= $(BUILD_DIR)/bin/smolcc
-CC = cc
+CC ?= cc
+
 ASFLAGS = -g
 LDFLAGS = -nostdlib
 
@@ -42,7 +44,7 @@ $(OBJ_DIR): | $(OUT_DIR)
 	mkdir -p $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
-	$(SMOLCC) -c -o $@ $<
+	$(SMOLCC) -v -nostdlib -c -o $@ $<
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.s | $(OBJ_DIR)
 	$(CC) $(ASFLAGS) -c -o $@ $<

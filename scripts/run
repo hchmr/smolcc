@@ -2,6 +2,9 @@
 
 set -Eeuo pipefail
 
+script_dir=$(dirname "$(readlink -f "$0")")
+smolcc="$script_dir/../build/dist/bin/smolcc"
+
 usage() {
     echo "Usage: $0 [options] <file.c>"
 }
@@ -20,7 +23,6 @@ arg_error() {
     exit 1
 }
 
-smolcc=${SMOLCC:-smolcc}
 source_file=
 
 while [[ "$#" -gt 0 ]]; do
@@ -40,6 +42,10 @@ done
 
 if [[ -z "$source_file" ]]; then
     arg_error "No source file specified"
+fi
+
+if [[ ! -x "$smolcc" ]]; then
+    arg_error "Compiler not found at $smolcc."
 fi
 
 tmp_root="${TMPDIR:-/tmp}"

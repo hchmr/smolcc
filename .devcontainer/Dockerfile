@@ -28,6 +28,7 @@ RUN apt-get update \
         python3 \
         python3-pip \
         ripgrep \
+        shfmt \
         sudo \
         zsh \
     && rm -rf /var/lib/apt/lists/*

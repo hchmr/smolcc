@@ -20,6 +20,9 @@ YELLOW = "\033[33m"
 RESET = "\033[0m"
 
 
+SMOLCC_PATH = Path("build") / "dist" / "bin" / "smolcc"
+
+
 class Verbsity(enum.IntEnum):
     NORMAL = 0
     VERBOSE = 1
@@ -41,7 +44,9 @@ class spec:
 
 
 def parse_directive(line: str) -> tuple[str, str] | None:
-    match = re.fullmatch(r"\s*//\s*#\s*(description|args|mode|exit|stderr|stdout)\s*:\s?(.*)", line)
+    match = re.fullmatch(
+        r"\s*//\s*#\s*(description|args|mode|exit|stderr|stdout)\s*:\s?(.*)", line
+    )
     if match is None:
         return None
     return match.group(1), match.group(2)
@@ -111,7 +116,7 @@ def format_output(prefix: str, text: str) -> list[str]:
     def should_quote(line: str) -> bool:
         if line.startswith('"'):
             return True
-        return any(ord(ch) < 32 and ch != '\t' for ch in line)
+        return any(ord(ch) < 32 and ch != "\t" for ch in line)
 
     lines: list[str] = []
     for line in text.splitlines():
@@ -214,7 +219,7 @@ def run_command(
                 prefix="smolcc-test-", dir=os.environ.get("TMPDIR") or None
             ) as temp_dir:
                 output_path = Path(temp_dir) / "a.o"
-                return run(["smolcc", "-c", "-o", str(output_path), str(path)])
+                return run([str(SMOLCC_PATH), "-c", "-o", str(output_path), str(path)])
         case "run":
             return run(["scripts/run", str(path), "--", *args])
         case _:
@@ -337,18 +342,15 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def build_smolcc(args: argparse.Namespace) -> str:
+def build_smolcc(args: argparse.Namespace):
     if not args.no_build:
         run(["make", "compiler", f"STAGE={args.stage}"], check=True)
-    smolcc_path = Path("build") / "bin" / "smolcc"
-    return str(smolcc_path)
 
 
 def main() -> int:
     args = parse_args()
 
-    smolcc = build_smolcc(args)
-    os.environ["PATH"] += os.pathsep + str(Path(smolcc).parent)
+    build_smolcc(args)
 
     print("\n===> Running tests...\n")
 

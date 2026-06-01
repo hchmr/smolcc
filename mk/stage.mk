@@ -17,7 +17,7 @@ ASMS = $(shell find $(SRC_DIR) -name '*.s')
 ### Outputs
 
 BUILD_DIR ?= build
-OUT_DIR = $(BUILD_DIR)/$(STAGE)
+OUT_DIR = $(BUILD_DIR)/bootstrap/$(STAGE)
 COMPILER = $(OUT_DIR)/smolcc1
 
 ifeq ($(STAGE),stage0)
@@ -33,7 +33,7 @@ endif
 
 ### Tools
 
-CC = cc
+CC ?= cc
 ASFLAGS = -g
 LDFLAGS = -nostdlib
 
@@ -45,7 +45,7 @@ CFLAGS = \
 	-Wall -Wextra -Wpedantic \
 	-Wno-strict-prototypes -Wno-parentheses -Wno-return-type -Wno-empty-body
 else
-SMOLCC1 = $(BUILD_DIR)/$(PREV_STAGE)/smolcc1
+SMOLCC1 = $(BUILD_DIR)/bootstrap/$(PREV_STAGE)/smolcc1
 endif
 
 ### Rules

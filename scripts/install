@@ -4,47 +4,106 @@ set -Eeuo pipefail
 
 script_dir=$(dirname "$(readlink -f "$0")")
 repo_dir=$(readlink -f "$script_dir/..")
+build_dir="${BUILD_DIR:-$repo_dir/build}"
+stage="stage2"
+component="all"
 
 usage() {
-    echo "Usage: $0 [options] <install-dir>"
-    exit 1
+    echo "Usage: $0 [options]"
 }
 
 help() {
-    echo "Options:"
-    echo "  -s  Which stage's compiler to install (default: stage2)"
-    echo "  -h  Show this help message and exit"
+    cat <<EOF
+Options:
+    --component <comp>  Component to install (default: $component)
+    --stage <stage>     Which stage's compiler to install (default: $stage)
+    --prefix <dir>      Installation prefix
+    -h, --help          Show this help message and exit
+EOF
     exit 0
 }
 
-stage="stage2"
+arg_error() {
+    echo "Error: $1" >&2
+    usage
+    exit 1
+}
 
-while getopts "s:h" opt; do
-    case $opt in
-        s) stage="$OPTARG" ;;
-        h) help ;;
-        *) usage ;;
+arg_val() {
+    [[ -n "$2" && ! "$2" =~ ^- ]] || arg_error "Option $1 requires an argument"
+    echo "$2"
+}
+
+build_info() {
+    printf "smolcc %s" "$stage"
+    if command -v git >/dev/null && git -C "$repo_dir" rev-parse --git-dir >/dev/null 2>&1; then
+        commit=$(git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null)
+        dirty=""
+        if ! git -C "$repo_dir" diff-index --quiet HEAD --; then
+            dirty="-dirty"
+        fi
+        if [[ -n "$commit" ]]; then
+            printf " (commit %s%s)" "$commit" "$dirty"
+        fi
+    fi
+    echo
+}
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    --component)
+        component=$(arg_val "$1" "$2")
+        shift
+        ;;
+    --stage)
+        stage=$(arg_val "$1" "$2")
+        shift
+        ;;
+    --prefix)
+        install_prefix=$(arg_val "$1" "$2")
+        shift
+        ;;
+    -h | --help)
+        help
+        ;;
+    *) arg_error "Unknown option: $1" ;;
     esac
+    shift
 done
 
-shift $((OPTIND - 1))
+[[ -n "$install_prefix" ]] || arg_error "Installation prefix is not specified"
+[[ -d "$install_prefix" ]] || arg_error "$install_prefix is not a directory"
 
-if [ "$#" -ne 1 ]; then
-    usage
-fi
+bin_dir="$install_prefix/bin"
+lib_dir="$install_prefix/lib/smolcc"
+libexec_dir="$install_prefix/libexec/smolcc"
 
-install_dir="$1"
+install_bin() {
+    install -d "$bin_dir" "$libexec_dir" "$lib_dir"
 
-mkdir -p "$install_dir"
+    install -m 755 "$script_dir/driver" "$bin_dir/smolcc"
+    install -m 755 "$build_dir/bootstrap/$stage/smolcc1" "$libexec_dir/smolcc1"
+    install -m 755 "$script_dir/asm-fmt" "$libexec_dir/asm-fmt"
 
-cp "$script_dir/driver" "$install_dir/smolcc"
-cp "$script_dir/asm-fmt" "$install_dir/asm-fmt"
-cp "$repo_dir/build/$stage/smolcc1" "$install_dir/smolcc1"
+    build_info > "$lib_dir/smolcc.version"
+    chmod 644 "$lib_dir/smolcc.version"
+}
 
-commit=$(git -C "$repo_dir" rev-parse --short HEAD)
-dirty=
-if [[ -n $(git -C "$repo_dir" status --porcelain) ]]; then
-    dirty=-dirty
-fi
-build_info="smolcc $stage (commit $commit$dirty)"
-echo "$build_info" > "$install_dir/smolcc.version"
+install_lib() {
+    install -d "$lib_dir"
+
+    install -m 644 "$build_dir/stdlib/libc.a" "$lib_dir/libc.a"
+    install -m 644 "$build_dir/stdlib/crt.o" "$lib_dir/crt.o"
+}
+
+case "$component" in
+bin) install_bin ;;
+lib) install_lib ;;
+all)
+    install_bin
+    install_lib
+    ;;
+*) arg_error "Unknown component: $component" ;;
+esac
+
+echo "Installed $(build_info) to $install_prefix"
