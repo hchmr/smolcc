@@ -58,7 +58,7 @@ static char *int_to_hex(unsigned long n, char *buf, int buf_len, int uppercase) 
     char *p = buf + buf_len;
 
     while (p > buf) {
-        int d = (int)(n & 15); // lower 4 bits
+        int d = (int)(n & 15);  // lower 4 bits
         n = n >> 4;
         prepend(&p, alphabet[d]);
         if (n == 0)
@@ -71,7 +71,7 @@ static char *int_to_oct(unsigned long n, char *buf, int buf_len) {
     char *p = buf + buf_len;
 
     while (p > buf) {
-        int d = (int)(n & 7); // lower 3 bits
+        int d = (int)(n & 7);  // lower 3 bits
         n = n >> 3;
         prepend(&p, (char)('0' + d));
         if (n == 0)
@@ -90,7 +90,7 @@ static const char *sscan_int(const char *s, int *out) {
     return s;
 }
 
-static unsigned long trunc(int size, long n) {
+static unsigned long trunc(int size, unsigned long n) {
     unsigned long mask = ~0UL >> (64 - size * 8);
     return n & mask;
 }
@@ -100,7 +100,9 @@ static unsigned long trunc(int size, long n) {
 
 enum {
     FMT_INT = 1,
+    FMT_UINT,
     FMT_LONG,
+    FMT_ULONG,
     FMT_STR,
     FMT_CHR,
     FMT_LIT,
@@ -156,13 +158,16 @@ static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
         }
 
         int int_fmt = FMT_INT;
-        if (*fmt == 'l' && strchr("dioxX", *(fmt + 1))) {
+        if (*fmt == 'l' && strchr("diouxXu", *(fmt + 1))) {
             fmt++;
             int_fmt = FMT_LONG;
         }
 
         if (*fmt == 'd' || *fmt == 'i') {
             spec->type = int_fmt;
+            spec->base = 10;
+        } else if (*fmt == 'u' || *fmt == 'U') {
+            spec->type = int_fmt == FMT_LONG ? FMT_ULONG : FMT_UINT;
             spec->base = 10;
         } else if (*fmt == 'o') {
             spec->type = int_fmt;
@@ -210,11 +215,12 @@ static int fill(struct file *stream, char c, int count) {
     return count;
 }
 
-static int fmt_int(struct file *stream, struct fmt_spec *spec, long n) {
+static int fmt_int(struct file *stream, struct fmt_spec *spec, unsigned long n) {
     const char *prefix = "";
     int prefix_len = 0;
-    if (spec->base == 10) {
-        if (n < 0) {
+    int is_signed = spec->type != FMT_UINT && spec->type != FMT_ULONG;
+    if (spec->base == 10 && is_signed) {
+        if ((long)n < 0) {
             prefix = "-";
             prefix_len = 1;
         } else if (spec->flags & FMT_FLAGS_PLUS_SIGN) {
@@ -237,8 +243,10 @@ static int fmt_int(struct file *stream, struct fmt_spec *spec, long n) {
     char num_buf[MAX_INT_LEN];
     char *num_str_end = num_buf + MAX_INT_LEN;
     char *num_str;
-    if (spec->base == 10) {
-        num_str = int_to_dec(n, num_buf, MAX_INT_LEN);
+    if (spec->base == 10 && is_signed) {
+        num_str = int_to_dec((long)n, num_buf, MAX_INT_LEN);
+    } else if (spec->base == 10) {
+        num_str = uint_to_dec(n, num_buf, MAX_INT_LEN);
     } else if (spec->base == 16) {
         num_str = int_to_hex(trunc(int_size, n), num_buf, MAX_INT_LEN, spec->flags & FMT_FLAGS_UPPER_HEX);
     } else if (spec->base == 8) {
@@ -327,11 +335,7 @@ static int fmt_chr(struct file *stream, struct fmt_spec *spec, char c) {
 }
 
 static int fmt_ptr(struct file *stream, void *p) {
-    enum {
-        PTR_SIZE = sizeof(void *),
-        N_DIGITS = PTR_SIZE * 2,
-        PTR_STR_LEN = 2 + N_DIGITS
-    };
+    enum { PTR_SIZE = sizeof(void *), N_DIGITS = PTR_SIZE * 2, PTR_STR_LEN = 2 + N_DIGITS };
 
     if (p == 0) {
         return fmt_lit(stream, "(nil)", 5);
@@ -354,9 +358,13 @@ int _vfprintf(struct file *stream, const char *fmt, va_list *ap) {
     while ((fmt = p_fmt(fmt, &spec)) != 0) {
         int nwp = 0;  // nw for this part of the format string
         if (spec.type == FMT_INT) {
-            nwp = fmt_int(stream, &spec, va_arg(*ap, int));
+            nwp = fmt_int(stream, &spec, (unsigned long)va_arg(*ap, int));
         } else if (spec.type == FMT_LONG) {
-            nwp = fmt_int(stream, &spec, va_arg(*ap, long));
+            nwp = fmt_int(stream, &spec, (unsigned long)va_arg(*ap, long));
+        } else if (spec.type == FMT_UINT) {
+            nwp = fmt_int(stream, &spec, va_arg(*ap, unsigned long));
+        } else if (spec.type == FMT_ULONG) {
+            nwp = fmt_int(stream, &spec, va_arg(*ap, unsigned long));
         } else if (spec.type == FMT_STR) {
             nwp = fmt_str(stream, &spec, va_arg(*ap, char *));
         } else if (spec.type == FMT_CHR) {

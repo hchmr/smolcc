@@ -16,6 +16,10 @@
 //# stdout: Min int (32): |-2147483648|
 //# stdout: %i specifier: |123|
 //# stdout:
+//# stdout: --- Unsigned decimal ---
+//# stdout: Unsigned int max:  |4294967295|
+//# stdout: Unsigned long max: |18446744073709551615|
+//# stdout:
 //# stdout: --- Long decimal ---
 //# stdout: Long decimal min: |-9223372036854775808|
 //# stdout: Long decimal max: |9223372036854775807|
@@ -106,6 +110,10 @@ int main() {
     printf("Max int (32): |%d|\n", 2147483647);
     printf("Min int (32): |%d|\n", -2147483647 - 1);
     printf("%%i specifier: |%i|\n", 123);  // should be same as %d
+
+    printf("\n--- Unsigned decimal ---\n");
+    printf("Unsigned int max:  |%u|\n", 4294967295U);
+    printf("Unsigned long max: |%lu|\n", 18446744073709551615UL);
 
     //= LONG DECIMAL
 

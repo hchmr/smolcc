@@ -21,8 +21,8 @@ YELLOW = "\033[33m"
 RESET = "\033[0m"
 
 
-SMOLCC_PATH = Path("build") / "dist" / "bin" / "smolcc"
-
+CC = "build/dist/bin/smolcc"
+CFLAGS: list[str] = []
 
 class Verbosity(enum.IntEnum):
     NORMAL = 0
@@ -226,17 +226,21 @@ def run(args: list[str], check: bool = False) -> subprocess.CompletedProcess[str
 def run_command(
     path: Path, mode: str, args: list[str]
 ) -> subprocess.CompletedProcess[str]:
-    match mode:
-        case "compile-only":
-            with tempfile.TemporaryDirectory(
-                prefix="smolcc-test-", dir=os.environ.get("TMPDIR") or None
-            ) as temp_dir:
+    with tempfile.TemporaryDirectory(
+        prefix="smolcc-test-", dir=os.environ.get("TMPDIR") or None
+    ) as temp_dir:
+        match mode:
+            case "compile-only":
                 output_path = Path(temp_dir) / "a.o"
-                return run([str(SMOLCC_PATH), "-c", "-o", str(output_path), str(path)])
-        case "run":
-            return run(["scripts/run", str(path), "--", *args])
-        case _:
-            raise ValueError(f"unsupported mode: {mode}")
+                return run([CC, *CFLAGS, "-c", "-o", str(output_path), str(path)])
+            case "run":
+                output_path = Path(temp_dir) / "a.out"
+                compile_result = run([CC, *CFLAGS, "-o", str(output_path), str(path)])
+                if compile_result.returncode != 0:
+                    return compile_result
+                return run([str(output_path), *args])
+            case _:
+                raise ValueError(f"unsupported mode: {mode}")
 
 
 def collect_case_groups(paths: list[Path]) -> list[list[Path]]:

@@ -1,6 +1,8 @@
 //# mode: run
 //# exit: 6
 
+#include <stdarg.h>
+
 static int sum_args(int flag, int n, ...) {
     va_list ap;
     flag ? va_start(ap, n) : va_start(ap, n);
