@@ -1,5 +1,5 @@
-int strlen(const char *s) {
-    int n = 0;
+long strlen(const char *s) {
+    long n = 0;
     while (*s++)
         n++;
     return n;
@@ -30,9 +30,19 @@ int strncmp(const char *s1, const char *s2, int n) {
     return 0;
 }
 
-void *memset(void *s, int c, int n) {
+const char *strchr(const char *s, int c) {
+    char ch = c;
+    while (*s) {
+        if (*s == ch)
+            return s;
+        s++;
+    }
+    return 0;
+}
+
+void *memset(void *s, int c, long n) {
     char *p = s;
-    for (int i = 0; i < n; i++) {
+    for (long i = 0; i < n; i++) {
         p[i] = c;
     }
     return s;

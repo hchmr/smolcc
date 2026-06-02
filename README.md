@@ -8,13 +8,13 @@ A small self-hosting C compiler for a subset of C, targeting `aarch64-unknown-li
 
 A small but usable subset of C is supported, including:
 
-* types: `void`, `char`, `int`, pointers, arrays, and structs
+* types: `void`, `char`, `int`, `long`, pointers, arrays, and structs
 * declarations: functions, globals, structs, and enums
 * statements: declarations, `if`, `while`, `for`, `break`, `continue`, and `return`
 * varargs: the basic API of `stdarg.h` is built-in (`va_start`, `va_arg`, and `va_end`)
 * interop: can call foreign functions and be called from foreign code
 
-These features were chosen to support the compiler's own implementation and bootstrap process, and to be sufficient for writing small toy programs. Some of the most notable missing features are integer types beyond `char` and `int`, unions, switch statements, and the preprocessor.
+These features were chosen to support the compiler's own implementation and bootstrap process, and to be sufficient for writing small toy programs. Some of the most notable missing features are integer types beyond `char` and `int` and `long`, unions, switch statements, and the preprocessor.
 
 ## Dependencies
 

@@ -4,8 +4,8 @@
 //= unistd
 
 enum { stdin = 0, stdout = 1, stderr = 2 };
-extern int read(int fd, void *buf, int count);
-extern int write(int fd, const void *buf, int count);
+extern long read(long fd, void *buf, long count);
+extern long write(long fd, const void *buf, long count);
 extern void _exit(int status);
 extern void abort();
 
@@ -26,9 +26,9 @@ static void write_char(int fd, int c) {
     write(fd, &ch, 1);
 }
 
-static void write_int(int fd, int n) {
-    if (n == -2147483647 - 1) {
-        write_str(fd, "-2147483648");
+static void write_int(int fd, long n) {
+    if (n == (long) 1 << 63) {
+        write_str(fd, "-9223372036854775808");
         return;
     }
     if (n < 0) {
@@ -47,6 +47,9 @@ static void vwritef(int fd, const char *fmt, va_list *args) {
             fmt++;
             if (*fmt == 'd') {
                 write_int(fd, va_arg(*args, int));
+            } else if (*fmt == 'l' && fmt[1] == 'd') {
+                fmt++;
+                write_int(fd, va_arg(*args, long));
             } else if (*fmt == 'c') {
                 write_char(fd, va_arg(*args, int));
             } else if (*fmt == 's') {
@@ -192,7 +195,7 @@ struct sym {
     int is_defined;
 
     // for Sym_Const
-    int val;
+    long val;
     // for Sym_Func
     struct stmt *body;
     struct sym *last_param;
@@ -213,6 +216,7 @@ enum {
     Ty_Void,
     Ty_Char,
     Ty_Int,
+    Ty_Long,
     Ty_Ptr,
     Ty_Arr,
     Ty_Func,
@@ -236,14 +240,14 @@ struct ty {
     struct ty *next;
 };
 
-static struct ty *tys, *void_ty, *char_ty, *int_ty, *va_list_ty;
+static struct ty *tys, *void_ty, *char_ty, *int_ty, *long_ty, *va_list_ty;
 
 static int ty_size(struct ty *t) {
     if (t->kind == Ty_Char) {
         return 1;
     } else if (t->kind == Ty_Int) {
         return 4;
-    } else if (t->kind == Ty_Ptr) {
+    } else if (t->kind == Ty_Long || t->kind == Ty_Ptr) {
         return 8;
     } else if (t->kind == Ty_Arr) {
         return ty_size(t->base) * t->arr_len;
@@ -294,7 +298,7 @@ static int ty_eq(struct ty *a, struct ty *b) {
 }
 
 static int is_integer_ty(struct ty *t) {
-    return t->kind == Ty_Int || t->kind == Ty_Char;
+    return t->kind == Ty_Int || t->kind == Ty_Long || t->kind == Ty_Char;
 }
 static int is_void_ty(struct ty *t) {
     return t->kind == Ty_Void;
@@ -377,6 +381,8 @@ static void init_tys() {
     char_ty = intern_ty(&tmp);
     tmp.kind = Ty_Int;
     int_ty = intern_ty(&tmp);
+    tmp.kind = Ty_Long;
+    long_ty = intern_ty(&tmp);
     tmp.kind = Ty_VaList;
     va_list_ty = intern_ty(&tmp);
 }
@@ -529,7 +535,7 @@ struct expr {
     struct pos pos;
     struct ty *ty;
 
-    int int_val;
+    long int_val;
     struct string *str_val;
     const char *fld_name;
     struct expr **subs;
@@ -610,16 +616,18 @@ static int is_null_ptr(struct expr *e) {
 //=============================================================================
 //= eval
 
-static int const_cast(int v, struct ty *t) {
+static long const_cast(long v, struct ty *t) {
     if (t->kind == Ty_Char)
         return v = v & 255, v >= 128 ? v - 256 : v;
     else if (t->kind == Ty_Int)
         return (int)v;
+    else if (t->kind == Ty_Long)
+        return (long)v;
     else
         die("const_cast: unreachable: %d", t->kind);
 }
 
-static int eval(struct expr *e) {
+static long eval(struct expr *e) {
     if (e->kind == Expr_Num) {
         return e->int_val;
     } else if (e->kind == Expr_Neg) {
@@ -666,9 +674,13 @@ static struct expr *cast_to(struct ty *t, struct expr *e) {
     return e->ty != t ? wrap_with(Expr_Cast, t, e) : e;
 }
 
+static struct ty *integer_promo_ty(struct ty *t1, struct ty *t2) {
+    return (t1->kind == Ty_Long || t2->kind == Ty_Long) ? long_ty : int_ty;
+}
+
 static void apply_ua_conv(struct expr **args) {
     assert("apply_ua_conv", is_integer_ty(args[0]->ty) && is_integer_ty(args[1]->ty));
-    struct ty *target_ty = int_ty;
+    struct ty *target_ty = integer_promo_ty(args[0]->ty, args[1]->ty);
     args[0] = cast_to(target_ty, args[0]);
     args[1] = cast_to(target_ty, args[1]);
 }
@@ -805,7 +817,7 @@ static struct expr *elab_expr(struct expr *e) {
             if (e->subs[0]->ty != e->subs[1]->ty)
                 err_at(&e->pos, "pointer types must match");
             e->kind = Expr_PtrDiff;
-            e->ty = int_ty;  // standard doesn't mandate pointer-sized ptrdiff_t, so int is sufficient
+            e->ty = long_ty;
         } else if (is_integer_ty(e->subs[0]->ty) && is_integer_ty(e->subs[1]->ty)) {
             apply_ua_conv(e->subs);
             e->ty = e->subs[0]->ty;
@@ -902,7 +914,7 @@ static struct expr *elab_cond_expr(struct expr *e) {
     return e;
 }
 
-static int elab_init(struct expr *e, struct ty *target_ty) {
+static long elab_init(struct expr *e, struct ty *target_ty) {
     e = elab_rvalue_expr(e);
     if (is_ptr_ty(target_ty) && is_null_ptr(e)) {
         return 0;
@@ -928,7 +940,7 @@ enum { MAX_TOK_LEN = 255 };
 
 enum { RDBUF_CAP = 256 };
 static char rdbuf[RDBUF_CAP];
-static int rdbuf_len, rdbuf_pos;
+static long rdbuf_len, rdbuf_pos;
 static struct pos chr_pos;
 static int chr;
 
@@ -937,7 +949,7 @@ static struct pos tok_pos;
 static char tok_str[MAX_TOK_LEN + 1];
 static int tok_len;
 static struct {
-    int n;
+    long n;
     char str[MAX_TOK_LEN + 1];
 } tok_val;
 
@@ -975,7 +987,7 @@ static void lex() {
             skip_chr();
             continue;
         } else if (chr >= '0' && chr <= '9') {
-            int n = 0;
+            long n = 0;
             while (chr >= '0' && chr <= '9') {
                 n = n * 10 + (chr - '0');
                 next_chr();
@@ -1079,7 +1091,7 @@ enum {
 static void p_decl(int scope, void *ctx);
 
 static int at_ty() {
-    return at("void") || at("char") || at("int") || at("va_list") || at("struct") || at("enum") || at("const");
+    return at("void") || at("char") || at("int") || at("long") || at("va_list") || at("struct") || at("enum") || at("const");
 }
 
 static int at_decl() {
@@ -1278,7 +1290,7 @@ static struct expr *p_expr(int rbp) {
     }
 }
 
-static int p_const_expr() {
+static long p_const_expr() {
     return eval(elab_rvalue_expr(p_expr(Prec_Cond - 1)));
 }
 
@@ -1435,6 +1447,8 @@ static void p_decl(int scope, void *ctx) {
             base_ty = void_ty;
         } else if (!base_ty && eat("int")) {
             base_ty = int_ty;
+        } else if (!base_ty && eat("long")) {
+            base_ty = long_ty;
         } else if (!base_ty && eat("char")) {
             base_ty = char_ty;
         } else if (!base_ty && eat("va_list")) {
@@ -1575,7 +1589,7 @@ static const char *get_str_op(struct ty *ty) {
         return "strb w";
     else if (ty->kind == Ty_Int)
         return "str w";
-    else if (ty->kind == Ty_Ptr)
+    else if (ty->kind == Ty_Long || ty->kind == Ty_Ptr)
         return "str x";
     else
         die("get_str_op: unreachable: %d", ty->kind);
@@ -1586,7 +1600,7 @@ static const char *get_ldr_op(struct ty *ty) {
         return "ldrsb x";
     else if (ty->kind == Ty_Int)
         return "ldrsw x";
-    else if (ty->kind == Ty_Ptr)
+    else if (ty->kind == Ty_Long || ty->kind == Ty_Ptr)
         return "ldr x";
     else
         die("get_ldr_op: unreachable: %d", ty->kind);
@@ -1601,16 +1615,16 @@ static void emit_str_load(struct string *str) {
     writef(stdout, "add x0, x0, :lo12:.L.str.%d\n", str->label);
 }
 
-static void emit_int_load(int val, int reg) {
-    int chunk_mask = (1 << 16) - 1;
-    int default_chunk = val < 0 ? chunk_mask : 0;
+static void emit_int_load(long val, int reg) {
+    long chunk_mask = (1 << 16) - 1;
+    long default_chunk = val < 0 ? chunk_mask : 0;
     for (int i = 0; i < 4; i++, val = val >> 16) {
-        int chunk = val & chunk_mask;
+        long chunk = val & chunk_mask;
         if (i == 0) {
             chunk = val < 0 ? chunk | ~chunk_mask : chunk;
-            writef(stdout, "mov x%d, #%d // %d\n", reg, chunk, val);
+            writef(stdout, "mov x%d, #%d // %ld\n", reg, chunk, val);
         } else if (chunk != default_chunk) {
-            writef(stdout, "movk x%d, #%d, lsl #%d\n", reg, chunk, i * 16);
+            writef(stdout, "movk x%d, #%d, lsl #%ld\n", reg, chunk, i * 16);
         }
     }
 }
@@ -1973,11 +1987,11 @@ static void emit_obj(struct sym *sym) {
 
     if (is_scalar(sym->ty)) {
         if (size == 1) {
-            writef(stdout, ".byte %d\n", sym->val);
+            writef(stdout, ".byte %d\n", (int)sym->val);
         } else if (size == 4) {
-            writef(stdout, ".long %d\n", sym->val);
+            writef(stdout, ".long %d\n", (int)sym->val);
         } else if (size == 8) {
-            writef(stdout, ".quad %d\n", sym->val);
+            writef(stdout, ".quad %ld\n", sym->val);
         } else {
             die("emit_obj: unreachable: %d", size);
         }
@@ -1989,7 +2003,7 @@ static void emit_obj(struct sym *sym) {
 static void emit_rt_helpers() {
     writef(stdout, ".section .text\n");
 
-    // void *_memcpy(void *d, const void *s, int n)
+    // void *_memcpy(void *d, const void *s, long n)
     writef(stdout, "_memcpy:\n");
     writef(stdout, "mov x3, x0\n");
     writef(stdout, "cbz x2, .L.memcpy.end\n");

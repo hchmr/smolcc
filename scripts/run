@@ -13,6 +13,7 @@ help() {
     usage
     cat <<EOF
 Options:
+    -v         Enable verbose output
     -h         Show this help message
 EOF
 }
@@ -23,20 +24,38 @@ arg_error() {
     exit 1
 }
 
+run() {
+    if $verbose; then
+        echo "$*"
+    fi
+    "$@"
+}
+
 source_file=
+verbose=false
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
-        -h|--help)
-        help; exit 0 ;;
-        --) shift; break ;;
-        *)
+    -h | --help)
+        help
+        exit 0
+        ;;
+    -v)
+        verbose=true
+        shift
+        ;;
+    --)
+        shift
+        break
+        ;;
+    *)
         if [[ -z "$source_file" ]]; then
             source_file="$1"
         else
             arg_error "Unexpected argument: $1"
         fi
-        shift ;;
+        shift
+        ;;
     esac
 done
 
@@ -48,12 +67,17 @@ if [[ ! -x "$smolcc" ]]; then
     arg_error "Compiler not found at $smolcc."
 fi
 
+v_flg=()
+if $verbose; then
+    v_flg+=("-v")
+fi
+
 tmp_root="${TMPDIR:-/tmp}"
 build_dir=$(mktemp -d "${tmp_root%/}/smolcc-run.XXXXXX")
 trap 'rm -rf "$build_dir"' EXIT
 
 output_file="$build_dir/a.out"
 
-"$smolcc" -o "$output_file" "$source_file"
+run "$smolcc" "${v_flg[@]}" -o "$output_file" "$source_file"
 
-"$output_file" "$@"
+run "$output_file" "$@"

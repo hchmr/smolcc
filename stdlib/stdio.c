@@ -16,12 +16,12 @@ enum {
 
 extern int open(const char *pathname, int flags, int mode);
 extern int close(int fd);
-extern int write(int fd, const void *buf, int nbytes);
-extern int read(int fd, void *buf, int nbytes);
+extern long write(int fd, const void *buf, long nbytes);
+extern long read(int fd, void *buf, long nbytes);
 
 extern int strcmp(const char *s1, const char *s2);
-extern int strlen(const char *s);
-extern void *memset(void *s, int c, int n);
+extern long strlen(const char *s);
+extern void *memset(void *s, int c, long n);
 
 //==============================================================================
 //= impl
@@ -40,7 +40,7 @@ struct file {
     int fd;
     int flags;
     char buf[FILE_BUF_CAP];
-    int buf_pos, buf_len;
+    long buf_pos, buf_len;
 };
 
 static struct file streams[MAX_FILES];
@@ -93,7 +93,7 @@ int ferror(struct file *stream) {
 
 int fflush(struct file *stream) {
     while (stream->buf_pos < stream->buf_len) {
-        int nw = write(stream->fd, &stream->buf[stream->buf_pos], stream->buf_len - stream->buf_pos);
+        long nw = write(stream->fd, &stream->buf[stream->buf_pos], stream->buf_len - stream->buf_pos);
         if (nw == -1) {
             set_flag(stream, FFLG_ERR);
             return EOF;
@@ -105,8 +105,8 @@ int fflush(struct file *stream) {
     return 0;
 }
 
-static int ffill(struct file *stream) {
-    int nr = read(stream->fd, stream->buf, FILE_BUF_CAP);
+static long ffill(struct file *stream) {
+    long nr = read(stream->fd, stream->buf, FILE_BUF_CAP);
     if (nr == -1) {
         set_flag(stream, FFLG_ERR);
         return EOF;
@@ -162,13 +162,13 @@ int fclose(struct file *stream) {
     return res;
 }
 
-int fwrite(const void *ptr, int size, int count, struct file *stream) {
-    int to_write = size * count;
+long fwrite(const void *ptr, long size, long count, struct file *stream) {
+    long to_write = size * count;
     if (to_write == 0)
         return 0;
     const char *buf = ptr;
 
-    int i = 0;
+    long i = 0;
     while (i < to_write) {
         if (stream->buf_len == FILE_BUF_CAP) {
             if (fflush(stream) == EOF) {
@@ -181,13 +181,13 @@ int fwrite(const void *ptr, int size, int count, struct file *stream) {
     return i / size;  // number of total objects written
 }
 
-int fread(void *ptr, int size, int count, struct file *stream) {
-    int to_read = size * count;
+long fread(void *ptr, long size, long count, struct file *stream) {
+    long to_read = size * count;
     if (to_read == 0)
         return 0;
     char *buf = ptr;
 
-    int i = 0;
+    long i = 0;
     while (i < to_read) {
         if (stream->buf_pos == stream->buf_len) {
             stream->buf_pos = stream->buf_len = 0;
@@ -223,7 +223,7 @@ int putchar(int c) {
 }
 
 int puts(const char *s) {
-    int len = strlen(s);
+    long len = strlen(s);
     if (fwrite(s, 1, len, stdout) != len) {
         return EOF;
     }

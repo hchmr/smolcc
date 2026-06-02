@@ -12,18 +12,18 @@ enum {
 
 extern int errno;
 
-extern int _do_syscall(int num  , ...);
+extern long _do_syscall(int num  , ...);
 
-static int set_errno(int res) {
+static long set_errno(long res) {
     if (res < 0) {
-        errno = -res;
+        errno = (int)-res;
         return -1;
     }
     return res;
 }
 
 int openat(int dirfd, const char *pathname, int flags, int mode) {
-    return set_errno(_do_syscall(Sys_OpenAt, dirfd, pathname, flags, mode));
+    return (int)set_errno(_do_syscall(Sys_OpenAt, dirfd, pathname, flags, mode));
 }
 
 int open(const char *pathname, int flags, int mode) {
@@ -31,17 +31,17 @@ int open(const char *pathname, int flags, int mode) {
 }
 
 int close(int fd) {
-    return set_errno(_do_syscall(Sys_Close, fd));
+    return (int)set_errno(_do_syscall(Sys_Close, fd));
 }
 
-int read(int fd, void *buf, int nbyte) {
+long read(int fd, void *buf, long nbyte) {
     return set_errno(_do_syscall(Sys_Read, fd, buf, nbyte));
 }
 
-int write(int fd, const void *buf, int nbyte) {
+long write(int fd, const void *buf, long nbyte) {
     return set_errno(_do_syscall(Sys_Write, fd, buf, nbyte));
 }
 
-int _exit(int status) {
-    return _do_syscall(Sys_Exit, status);
+void _exit(int status) {
+    _do_syscall(Sys_Exit, status);
 }

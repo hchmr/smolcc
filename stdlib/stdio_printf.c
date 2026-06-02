@@ -6,10 +6,11 @@
 enum { EOF = -1 };
 extern struct file *stdout;
 extern int fputc(int c, struct file *stream);
-extern int fwrite(const void *ptr, int size, int count, struct file *stream);
+extern long fwrite(const void *ptr, long size, long count, struct file *stream);
 
-extern int strlen(const char *s);
-extern void *memset(void *s, int c, int n);
+extern long strlen(const char *s);
+extern const char *strchr(const char *s, int c);
+extern void *memset(void *s, long c, long n);
 
 extern int isdigit(int c);
 
@@ -17,10 +18,10 @@ extern int isdigit(int c);
 //= utils
 
 enum {
-    // declen(-2^31) = len(-2147483648) = 11
-    // octlen(2^32) = len(4000000000) = 10
-    // hexlen(2^32) = len(ffffffff) = 8
-    MAX_INT_LEN = 12
+    // declen(-2^63) = len(-9223372036854775808) = 20
+    // octlen(2^64) = len(1000000000000000000000) = 22
+    // hexlen(2^64) = len(ffffffffffffffff) = 16
+    MAX_INT_LEN = 22
 };
 
 static void prepend(char **dst, char c) {
@@ -28,13 +29,14 @@ static void prepend(char **dst, char c) {
     **dst = c;
 }
 
-static char *int_to_dec(int n, char *buf, int buf_len) {
+// todo: long
+static char *int_to_dec(long n, char *buf, int buf_len) {
     char *p = buf + buf_len;
 
     int neg, d;
     neg = n < 0;
     if (neg) {
-        if (n == -2147483647 - 1) {
+        if (n == (long) 1 << 63) {
             d = -(n % -10);
             n = n / -10;
             prepend(&p, '0' + d);
@@ -57,15 +59,14 @@ static char *int_to_dec(int n, char *buf, int buf_len) {
     return p;
 }
 
-static char *int_to_hex(int n, char *buf, int buf_len, int uppercase) {
+static char *int_to_hex(long n, char *buf, int buf_len, int uppercase) {
     const char *alphabet = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
     char *p = buf + buf_len;
 
-    for (int i = 0; i < 8; i++) {
-        if (i == buf_len)
-            return 0;
-        int d = n & 15;
-        n = (n >> 4) & 268435455; // logical right shift by 4
+    while (p > buf) {
+        long mask_4 = 15, shift_4 = 4;
+        int d = (int)(n & mask_4); // lower 4 bits
+        n = (n >> shift_4) & ~(mask_4 << (64 - shift_4)); // logical shift by 4
         prepend(&p, alphabet[d]);
         if (n == 0)
             break;
@@ -73,15 +74,14 @@ static char *int_to_hex(int n, char *buf, int buf_len, int uppercase) {
     return p;
 }
 
-static char *int_to_oct(int n, char *buf, int buf_len) {
+static char *int_to_oct(long n, char *buf, int buf_len) {
     char *p = buf + buf_len;
 
-    for (int i = 0; i < 11; i++) {
-        if (i == buf_len)
-            return 0;
-        int d = n & 7;
-        n = (n >> 3) & 536870911; // logical right shift by 3
-        prepend(&p, '0' + d);
+    while (p > buf) {
+        long mask_3 = 7, shift_3 = 3;
+        int d = (int)(n & mask_3); // lower 3 bits
+        n = (n >> shift_3) & ~(mask_3 << (64 - shift_3)); // logical shift by 3
+        prepend(&p, (char)('0' + d));
         if (n == 0)
             break;
     }
@@ -103,6 +103,7 @@ static const char *sscan_int(const char *s, int *out) {
 
 enum {
     FMT_INT = 1,
+    FMT_LONG,
     FMT_STR,
     FMT_CHR,
     FMT_LIT,
@@ -133,7 +134,6 @@ struct fmt_spec {
 static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
     if (!*fmt)
         return 0;
-
     memset(spec, 0, sizeof(struct fmt_spec));
     if (*fmt == '%') {
         fmt++;
@@ -157,14 +157,21 @@ static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
         if (isdigit(*fmt)) {
             fmt = sscan_int(fmt, &spec->min_width);
         }
+
+        int int_fmt = FMT_INT;
+        if (*fmt == 'l' && strchr("dioxX", *(fmt + 1))) {
+            fmt++;
+            int_fmt = FMT_LONG;
+        }
+
         if (*fmt == 'd' || *fmt == 'i') {
-            spec->type = FMT_INT;
+            spec->type = int_fmt;
             spec->base = 10;
         } else if (*fmt == 'o') {
-            spec->type = FMT_INT;
+            spec->type = int_fmt;
             spec->base = 8;
         } else if (*fmt == 'x' || *fmt == 'X') {
-            spec->type = FMT_INT;
+            spec->type = int_fmt;
             spec->base = 16;
             if (*fmt == 'X') {
                 spec->flags = spec->flags | FMT_FLAGS_UPPER_HEX;
@@ -206,7 +213,7 @@ static int fill(struct file *stream, char c, int count) {
     return count;
 }
 
-static int fmt_int(struct file *stream, struct fmt_spec *spec, int n) {
+static int fmt_int(struct file *stream, struct fmt_spec *spec, long n) {
     const char *prefix = "";
     int prefix_len = 0;
     if (spec->base == 10) {
@@ -332,20 +339,13 @@ static int fmt_ptr(struct file *stream, void *p) {
     }
 
     char buf[PTR_STR_LEN];
-    char *beg = buf + PTR_STR_LEN, *end = beg;
-    for (int i = 0; i < PTR_SIZE; i++) {
-        int byte = ((char *)&p)[i] & 255;
-        for (int j = 0; j < 2; j++) {
-            int d = (byte >> (4 * j)) & 15;
-            prepend(&beg, "0123456789abcdef"[d]);
-        }
+    char *num_str = int_to_hex((long)p, buf, PTR_STR_LEN, 0);
+    if (num_str == 0) {
+        return -1;
     }
-    while (beg != end - 1 && *beg == '0') {
-        beg++;
-    }
-    prepend(&beg, 'x');
-    prepend(&beg, '0');
-    return fmt_lit(stream, beg, end - beg);
+    prepend(&num_str, 'x');
+    prepend(&num_str, '0');
+    return fmt_lit(stream, num_str, buf + PTR_STR_LEN - num_str);
 }
 
 // must use va_list* because va_list is an aggregate
@@ -355,7 +355,10 @@ int _vfprintf(struct file *stream, const char *fmt, va_list *ap) {
     while ((fmt = p_fmt(fmt, &spec)) != 0) {
         int nwp = 0;  // nw for this part of the format string
         if (spec.type == FMT_INT) {
-            nwp = fmt_int(stream, &spec, va_arg(*ap, int));
+            int mask_32 = ((long)1 << 31) - 1;
+            nwp = fmt_int(stream, &spec, va_arg(*ap, int) & mask_32);
+        } else if (spec.type == FMT_LONG) {
+            nwp = fmt_int(stream, &spec, va_arg(*ap, long));
         } else if (spec.type == FMT_STR) {
             nwp = fmt_str(stream, &spec, va_arg(*ap, char *));
         } else if (spec.type == FMT_CHR) {
