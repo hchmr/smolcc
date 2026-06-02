@@ -5,8 +5,8 @@
 struct file;
 
 extern struct file *stdin, *stdout;
-extern int fread(void *ptr, int size, int count, struct file *stream);
-extern int fwrite(const void *ptr, int size, int count, struct file *stream);
+extern long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream);
+extern long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 
 int main() {
     char buf[4];

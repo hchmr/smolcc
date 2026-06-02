@@ -15,8 +15,8 @@ extern struct file *stdin, *stdout, *stderr;
 extern struct file *fopen(const char *filename, const char *mode);
 extern int fclose(struct file *stream);
 extern int ferror(struct file *stream);
-extern long fread(void *ptr, long size, long count, struct file *stream);
-extern long fwrite(const void *ptr, long size, long count, struct file *stream);
+extern long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream);
+extern long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 extern int fprintf(struct file *stream, const char *format, ...);
 
 extern void perror(const char *msg);

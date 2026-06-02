@@ -6,11 +6,11 @@
 enum { EOF = -1 };
 extern struct file *stdout;
 extern int fputc(int c, struct file *stream);
-extern long fwrite(const void *ptr, long size, long count, struct file *stream);
+extern long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 
-extern long strlen(const char *s);
+extern unsigned long strlen(const char *s);
 extern const char *strchr(const char *s, int c);
-extern void *memset(void *s, long c, long n);
+extern void *memset(void *s, long c, unsigned long n);
 
 extern int isdigit(int c);
 
@@ -29,44 +29,37 @@ static void prepend(char **dst, char c) {
     **dst = c;
 }
 
-// todo: long
-static char *int_to_dec(long n, char *buf, int buf_len) {
+static char *uint_to_dec(unsigned long n, char *buf, int buf_len) {
     char *p = buf + buf_len;
 
-    int neg, d;
-    neg = n < 0;
-    if (neg) {
-        if (n == (long) 1 << 63) {
-            d = -(n % -10);
-            n = n / -10;
-            prepend(&p, '0' + d);
-        } else {
-            n = -n;
-        }
-    }
-
     while (1) {
-        d = n % 10;
+        int d = n % 10;
         n = n / 10;
         prepend(&p, '0' + d);
         if (n == 0)
             break;
     }
 
-    if (neg) {
-        prepend(&p, '-');
-    }
     return p;
 }
 
-static char *int_to_hex(long n, char *buf, int buf_len, int uppercase) {
+static char *int_to_dec(long n, char *buf, int buf_len) {
+    if (n < 0) {
+        char *num_str = uint_to_dec((unsigned long)(-(n + 1)) + 1, buf, buf_len);
+        prepend(&num_str, '-');
+        return num_str;
+    } else {
+        return uint_to_dec((unsigned long)n, buf, buf_len);
+    }
+}
+
+static char *int_to_hex(unsigned long n, char *buf, int buf_len, int uppercase) {
     const char *alphabet = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
     char *p = buf + buf_len;
 
     while (p > buf) {
-        long mask_4 = 15, shift_4 = 4;
-        int d = (int)(n & mask_4); // lower 4 bits
-        n = (n >> shift_4) & ~(mask_4 << (64 - shift_4)); // logical shift by 4
+        int d = (int)(n & 15); // lower 4 bits
+        n = n >> 4;
         prepend(&p, alphabet[d]);
         if (n == 0)
             break;
@@ -74,13 +67,12 @@ static char *int_to_hex(long n, char *buf, int buf_len, int uppercase) {
     return p;
 }
 
-static char *int_to_oct(long n, char *buf, int buf_len) {
+static char *int_to_oct(unsigned long n, char *buf, int buf_len) {
     char *p = buf + buf_len;
 
     while (p > buf) {
-        long mask_3 = 7, shift_3 = 3;
-        int d = (int)(n & mask_3); // lower 3 bits
-        n = (n >> shift_3) & ~(mask_3 << (64 - shift_3)); // logical shift by 3
+        int d = (int)(n & 7); // lower 3 bits
+        n = n >> 3;
         prepend(&p, (char)('0' + d));
         if (n == 0)
             break;
@@ -96,6 +88,11 @@ static const char *sscan_int(const char *s, int *out) {
     }
     *out = n;
     return s;
+}
+
+static unsigned long trunc(int size, long n) {
+    unsigned long mask = ~0UL >> (64 - size * 8);
+    return n & mask;
 }
 
 //==============================================================================
@@ -235,15 +232,17 @@ static int fmt_int(struct file *stream, struct fmt_spec *spec, long n) {
         prefix_len = 2;
     }
 
+    int int_size = spec->type == FMT_INT ? sizeof(int) : sizeof(long);
+
     char num_buf[MAX_INT_LEN];
     char *num_str_end = num_buf + MAX_INT_LEN;
     char *num_str;
     if (spec->base == 10) {
         num_str = int_to_dec(n, num_buf, MAX_INT_LEN);
     } else if (spec->base == 16) {
-        num_str = int_to_hex(n, num_buf, MAX_INT_LEN, spec->flags & FMT_FLAGS_UPPER_HEX);
+        num_str = int_to_hex(trunc(int_size, n), num_buf, MAX_INT_LEN, spec->flags & FMT_FLAGS_UPPER_HEX);
     } else if (spec->base == 8) {
-        num_str = int_to_oct(n, num_buf, MAX_INT_LEN);
+        num_str = int_to_oct(trunc(int_size, n), num_buf, MAX_INT_LEN);
     } else {
         num_str = num_str_end;  // empty string
     }
@@ -355,8 +354,7 @@ int _vfprintf(struct file *stream, const char *fmt, va_list *ap) {
     while ((fmt = p_fmt(fmt, &spec)) != 0) {
         int nwp = 0;  // nw for this part of the format string
         if (spec.type == FMT_INT) {
-            int mask_32 = ((long)1 << 31) - 1;
-            nwp = fmt_int(stream, &spec, va_arg(*ap, int) & mask_32);
+            nwp = fmt_int(stream, &spec, va_arg(*ap, int));
         } else if (spec.type == FMT_LONG) {
             nwp = fmt_int(stream, &spec, va_arg(*ap, long));
         } else if (spec.type == FMT_STR) {

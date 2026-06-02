@@ -11,9 +11,9 @@
 //# stdout: --- Decimal edge cases ---
 //# stdout: Zero:         |0|
 //# stdout: One:          |1|
-//# stdout: Minus one:    |2147483647|
+//# stdout: Minus one:    |-1|
 //# stdout: Max int (32): |2147483647|
-//# stdout: Min int (32): |0|
+//# stdout: Min int (32): |-2147483648|
 //# stdout: %i specifier: |123|
 //# stdout:
 //# stdout: --- Long decimal ---
@@ -25,12 +25,12 @@
 //# stdout: Hex upper:    |abcdef|
 //# stdout: Hex lower:    |ABCDEF|
 //# stdout: Hex positive: |7b|
-//# stdout: Hex minus one:|7fffffff|
-//# stdout: Hex min int:  |0|
+//# stdout: Hex minus one:|ffffffff|
+//# stdout: Hex min int:  |80000000|
 //# stdout: Oct zero:     |0|
 //# stdout: Oct positive: |173|
-//# stdout: Oct minus one:|17777777777|
-//# stdout: Oct min int:  |0|
+//# stdout: Oct minus one:|37777777777|
+//# stdout: Oct min int:  |20000000000|
 //# stdout: Long min hex: |8000000000000000|
 //# stdout: Long max hex: |7fffffffffffffff|
 //# stdout: Long min oct: |1000000000000000000000|
@@ -38,9 +38,9 @@
 //# stdout:
 //# stdout: --- Sign Flags ('+' and ' ') ---
 //# stdout: ' ' pos:  | 123|
-//# stdout: ' ' neg:  | 2147483525|
+//# stdout: ' ' neg:  |-123|
 //# stdout: '+' pos:  |+123|
-//# stdout: '+' neg:  |+2147483525|
+//# stdout: '+' neg:  |-123|
 //# stdout: '+' zero: |+0|
 //# stdout: ' ' zero: | 0|
 //# stdout:
@@ -59,7 +59,7 @@
 //# stdout: Alt hex zero: |0|
 //# stdout: Alt hex pos:  |0xff|
 //# stdout: Alt hex upper:|0XFF|
-//# stdout: Alt hex neg:  |0x7fffffff|
+//# stdout: Alt hex neg:  |0xffffffff|
 //# stdout: Alt oct zero: |0|
 //# stdout: Alt oct pos:  |010|
 //# stdout:

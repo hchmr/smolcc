@@ -4,8 +4,8 @@
 //= unistd
 
 enum { stdin = 0, stdout = 1, stderr = 2 };
-extern long read(long fd, void *buf, long count);
-extern long write(long fd, const void *buf, long count);
+extern long read(long fd, void *buf, unsigned long count);
+extern long write(long fd, const void *buf, unsigned long count);
 extern void _exit(int status);
 extern void abort();
 
@@ -26,19 +26,20 @@ static void write_char(int fd, int c) {
     write(fd, &ch, 1);
 }
 
-static void write_int(int fd, long n) {
-    if (n == (long) 1 << 63) {
-        write_str(fd, "-9223372036854775808");
-        return;
-    }
-    if (n < 0) {
-        write_char(fd, '-');
-        n = -n;
-    }
+static void write_uint(int fd, unsigned long n) {
     if (n >= 10) {
-        write_int(fd, n / 10);
+        write_uint(fd, n / 10);
     }
     write_char(fd, n % 10 + '0');
+}
+
+static void write_int(int fd, long n) {
+    if (n < 0) {
+        write_char(fd, '-');
+        write_uint(fd, (unsigned long)(-(n + 1)) + 1);  // avoid overflow
+    } else {
+        write_uint(fd, n);
+    }
 }
 
 static void vwritef(int fd, const char *fmt, va_list *args) {
@@ -214,9 +215,7 @@ struct sym {
 
 enum {
     Ty_Void,
-    Ty_Char,
-    Ty_Int,
-    Ty_Long,
+    Ty_Integer,
     Ty_Ptr,
     Ty_Arr,
     Ty_Func,
@@ -226,6 +225,8 @@ enum {
 
 struct ty {
     int kind;
+    // for Ty_Integer
+    int is_signed, width;
     // for Ty_Ptr and Ty_Arr
     struct ty *base;
     // for Ty_Arr
@@ -240,14 +241,12 @@ struct ty {
     struct ty *next;
 };
 
-static struct ty *tys, *void_ty, *char_ty, *int_ty, *long_ty, *va_list_ty;
+static struct ty *tys, *void_ty, *char_ty, *uchar_ty, *int_ty, *uint_ty, *long_ty, *ulong_ty, *va_list_ty;
 
 static int ty_size(struct ty *t) {
-    if (t->kind == Ty_Char) {
-        return 1;
-    } else if (t->kind == Ty_Int) {
-        return 4;
-    } else if (t->kind == Ty_Long || t->kind == Ty_Ptr) {
+    if (t->kind == Ty_Integer) {
+        return t->width;
+    } else if (t->kind == Ty_Ptr) {
         return 8;
     } else if (t->kind == Ty_Arr) {
         return ty_size(t->base) * t->arr_len;
@@ -279,6 +278,8 @@ static int ty_eq(struct ty *a, struct ty *b) {
         return 1;
     } else if (a->kind != b->kind) {
         return 0;
+    } else if (a->kind == Ty_Integer) {
+        return a->is_signed == b->is_signed && a->width == b->width;
     } else if (a->kind == Ty_Ptr) {
         return a->base == b->base;
     } else if (a->kind == Ty_Arr) {
@@ -298,7 +299,7 @@ static int ty_eq(struct ty *a, struct ty *b) {
 }
 
 static int is_integer_ty(struct ty *t) {
-    return t->kind == Ty_Int || t->kind == Ty_Long || t->kind == Ty_Char;
+    return t->kind == Ty_Integer;
 }
 static int is_void_ty(struct ty *t) {
     return t->kind == Ty_Void;
@@ -366,6 +367,14 @@ static struct ty *mk_func_ty(struct ty *ret_ty, struct ty **param_tys, int n_par
     return intern_ty(&t);
 }
 
+static struct ty *mk_integer_ty(int is_signed, int width) {
+    struct ty t;
+    t.kind = Ty_Integer;
+    t.is_signed = is_signed;
+    t.width = width;
+    return intern_ty(&t);
+}
+
 static struct ty *get_common_ptr_ty(struct ty *t1, struct ty *t2) {
     assert("get_common_ptr_ty", is_ptr_ty(t1) && is_ptr_ty(t2));
     if (is_void_ptr(t1) || is_void_ptr(t2))
@@ -377,14 +386,14 @@ static void init_tys() {
     struct ty tmp;
     tmp.kind = Ty_Void;
     void_ty = intern_ty(&tmp);
-    tmp.kind = Ty_Char;
-    char_ty = intern_ty(&tmp);
-    tmp.kind = Ty_Int;
-    int_ty = intern_ty(&tmp);
-    tmp.kind = Ty_Long;
-    long_ty = intern_ty(&tmp);
     tmp.kind = Ty_VaList;
     va_list_ty = intern_ty(&tmp);
+    char_ty = mk_integer_ty(1, 1);
+    uchar_ty = mk_integer_ty(0, 1);
+    int_ty = mk_integer_ty(1, 4);
+    uint_ty = mk_integer_ty(0, 4);
+    long_ty = mk_integer_ty(1, 8);
+    ulong_ty = mk_integer_ty(0, 8);
 }
 
 //=============================================================================
@@ -616,37 +625,46 @@ static int is_null_ptr(struct expr *e) {
 //=============================================================================
 //= eval
 
-static long const_cast(long v, struct ty *t) {
-    if (t->kind == Ty_Char)
-        return v = v & 255, v >= 128 ? v - 256 : v;
-    else if (t->kind == Ty_Int)
-        return (int)v;
-    else if (t->kind == Ty_Long)
-        return (long)v;
-    else
-        die("const_cast: unreachable: %d", t->kind);
+static unsigned long const_cast(struct ty *target, unsigned long a) {
+    a = a & ~0UL >> (64 - target->width * 8);  // truncate
+    if (target->is_signed && target->width < 8) {
+        int shift = 64 - target->width * 8;
+        a = (long)(a << shift) >> shift;  // sign-extend
+    }
+    return a;
 }
 
-static long eval(struct expr *e) {
+static unsigned long eval(struct expr *e) {
+    int is_signed = is_integer_ty(e->ty) && e->ty->is_signed;
     if (e->kind == Expr_Num) {
         return e->int_val;
     } else if (e->kind == Expr_Neg) {
-        return -eval(e->subs[0]);
+        return const_cast(e->ty, -eval(e->subs[0]));
+    } else if (e->kind == Expr_BitNot) {
+        return const_cast(e->ty, ~eval(e->subs[0]));
     } else if (e->kind == Expr_Add) {
-        return eval(e->subs[0]) + eval(e->subs[1]);
+        return const_cast(e->ty, eval(e->subs[0]) + eval(e->subs[1]));
     } else if (e->kind == Expr_Sub) {
-        return eval(e->subs[0]) - eval(e->subs[1]);
+        return const_cast(e->ty, eval(e->subs[0]) - eval(e->subs[1]));
     } else if (e->kind == Expr_Mul) {
-        return eval(e->subs[0]) * eval(e->subs[1]);
+        return const_cast(e->ty, eval(e->subs[0]) * eval(e->subs[1]));
     } else if (e->kind == Expr_Shl) {
-        return eval(e->subs[0]) << eval(e->subs[1]);
+        return const_cast(e->ty, eval(e->subs[0]) << eval(e->subs[1]));
+    } else if (e->kind == Expr_Shr && is_signed) {
+        return const_cast(e->ty, (long)eval(e->subs[0]) >> eval(e->subs[1]));
     } else if (e->kind == Expr_Shr) {
-        return eval(e->subs[0]) >> eval(e->subs[1]);
+        return const_cast(e->ty, eval(e->subs[0]) >> eval(e->subs[1]));
+    } else if (e->kind == Expr_BitAnd) {
+        return const_cast(e->ty, eval(e->subs[0]) & eval(e->subs[1]));
+    } else if (e->kind == Expr_BitXor) {
+        return const_cast(e->ty, eval(e->subs[0]) ^ eval(e->subs[1]));
+    } else if (e->kind == Expr_BitOr) {
+        return const_cast(e->ty, eval(e->subs[0]) | eval(e->subs[1]));
     } else if (e->kind == Expr_Cast) {
         if (is_ptr_ty(e->ty) && is_null_ptr(e->subs[0])) {
             return 0;
         } else if (is_integer_ty(e->ty) && is_integer_ty(e->subs[0]->ty)) {
-            return const_cast(eval(e->subs[0]), e->ty);
+            return const_cast(e->ty, eval(e->subs[0]));
         } else {
             err_at(&e->pos, "bad cast in constant expression");
         }
@@ -675,7 +693,12 @@ static struct expr *cast_to(struct ty *t, struct expr *e) {
 }
 
 static struct ty *integer_promo_ty(struct ty *t1, struct ty *t2) {
-    return (t1->kind == Ty_Long || t2->kind == Ty_Long) ? long_ty : int_ty;
+    assert("integer_promo_ty", is_integer_ty(t1) && is_integer_ty(t2));
+    int rank1 = t1->width + !t1->is_signed;
+    int rank2 = t2->width + !t2->is_signed;
+    if (rank1 < 4 || rank2 < 4)
+        return int_ty;
+    return rank1 > rank2 ? t1 : t2;
 }
 
 static void apply_ua_conv(struct expr **args) {
@@ -737,7 +760,7 @@ static struct expr *elab_expr(struct expr *e) {
     }
 
     if (e->kind == Expr_Num) {
-        e->ty = int_ty;
+        e->ty = e->ty ? e->ty : int_ty;
     } else if (e->kind == Expr_Chr) {
         e->kind = Expr_Num;
         e->ty = char_ty;
@@ -919,7 +942,7 @@ static long elab_init(struct expr *e, struct ty *target_ty) {
     if (is_ptr_ty(target_ty) && is_null_ptr(e)) {
         return 0;
     } else if (is_integer_ty(target_ty) && is_integer_ty(e->ty)) {
-        return const_cast(eval(e), target_ty);
+        return const_cast(target_ty, eval(e));
     } else {
         err_at(&e->pos, "target type mismatch");
     }
@@ -949,7 +972,8 @@ static struct pos tok_pos;
 static char tok_str[MAX_TOK_LEN + 1];
 static int tok_len;
 static struct {
-    long n;
+    unsigned long n;
+    int u, l; // suffixes: unsigned, long
     char str[MAX_TOK_LEN + 1];
 } tok_val;
 
@@ -978,20 +1002,27 @@ static void next_chr() {
     skip_chr();
 }
 
+static int eat_chr(int c) {
+    return chr == c ? (next_chr(), 1) : 0;
+}
+
 static void lex() {
     while (1) {
         tok_len = 0, tok_pos = chr_pos;
         if (chr == EOF) {
             tok = EOF;
-        } else if (chr == ' ' || chr == '\t' || chr == '\n') {
-            skip_chr();
+        } else if (eat_chr(' ') || eat_chr('\t') || eat_chr('\n')) {
             continue;
         } else if (chr >= '0' && chr <= '9') {
-            long n = 0;
+            unsigned long n = 0;
             while (chr >= '0' && chr <= '9') {
+                if (n > (~0UL - (chr - '0')) / 10)
+                    err_at(&chr_pos, "integer literal overflow");
                 n = n * 10 + (chr - '0');
                 next_chr();
             }
+            tok_val.u = eat_chr('u') || eat_chr('U');
+            tok_val.l = eat_chr('l') || eat_chr('L');
             tok_val.n = n;
             tok = Tok_Num;
         } else if (chr >= 'a' && chr <= 'z' || chr >= 'A' && chr <= 'Z' || chr == '_') {
@@ -1012,8 +1043,7 @@ static void lex() {
                 if (len == MAX_TOK_LEN)
                     err_at(&chr_pos, "string/char literal too long");
                 int decoded = chr;
-                if (chr == '\\') {
-                    skip_chr();
+                if (eat_chr('\\')) {
                     const char *escapes = "abfnrtv\\'\"?0", *unescapes = "\a\b\f\n\r\t\v\\\'\"\?\0";
                     if (!find_chr(escapes, chr))
                         err_at(&chr_pos, "unknown escape sequence");
@@ -1031,7 +1061,7 @@ static void lex() {
         } else {
             int prev = chr;
             next_chr();
-            if (prev == '#' || prev == '/' && chr == '/') {
+            if (prev == '#' || prev == '/' && eat_chr('/')) {
                 while (chr != '\n' && chr != EOF) {
                     skip_chr();
                 }
@@ -1091,7 +1121,8 @@ enum {
 static void p_decl(int scope, void *ctx);
 
 static int at_ty() {
-    return at("void") || at("char") || at("int") || at("long") || at("va_list") || at("struct") || at("enum") || at("const");
+    return at("void") || at("char") || at("int") || at("long") || at("va_list") || at("struct") || at("enum")
+        || at("unsigned") || at("const");
 }
 
 static int at_decl() {
@@ -1148,6 +1179,9 @@ static struct expr *p_expr(int rbp) {
     } else if (tok == Tok_Num) {
         acc = mk_expr(&pos, Expr_Num, 0);
         acc->int_val = tok_val.n;
+        acc->ty = tok_val.u ? (tok_val.l ? ulong_ty : uint_ty) : (tok_val.l ? long_ty : int_ty);
+        if ((long)const_cast(acc->ty, acc->int_val) != acc->int_val)
+            err_at(&pos, "integer literal overflow");
         lex();
     } else if (tok == Tok_Str) {
         acc = mk_expr(&pos, Expr_Str, 0);
@@ -1290,7 +1324,7 @@ static struct expr *p_expr(int rbp) {
     }
 }
 
-static long p_const_expr() {
+static unsigned long p_const_expr() {
     return eval(elab_rvalue_expr(p_expr(Prec_Cond - 1)));
 }
 
@@ -1422,7 +1456,7 @@ static struct ty *p_enum() {
         struct pos name_pos = tok_pos;
         const char *name = p_ident();
         if (eat("=")) {
-            val = p_const_expr();
+            val = (int)p_const_expr();
         }
         if (!at("}")) {
             expect(",");
@@ -1436,9 +1470,12 @@ static void p_decl(int scope, void *ctx) {
     struct pos pos = tok_pos;
     int storage = 0;
     struct ty *base_ty = 0;
+    int is_unsigned = 0;
     while (1) {
         if (eat("const")) {
             // ignored
+        } else if (!base_ty && eat("unsigned")) {
+            is_unsigned = 1;
         } else if (!storage && eat("static")) {
             storage = Static;
         } else if (!storage && eat("extern")) {
@@ -1446,11 +1483,11 @@ static void p_decl(int scope, void *ctx) {
         } else if (!base_ty && eat("void")) {
             base_ty = void_ty;
         } else if (!base_ty && eat("int")) {
-            base_ty = int_ty;
+            base_ty = is_unsigned ? uint_ty : int_ty;
         } else if (!base_ty && eat("long")) {
-            base_ty = long_ty;
+            base_ty = is_unsigned ? ulong_ty : long_ty;
         } else if (!base_ty && eat("char")) {
-            base_ty = char_ty;
+            base_ty = is_unsigned ? uchar_ty : char_ty;
         } else if (!base_ty && eat("va_list")) {
             base_ty = va_list_ty;
         } else if (!base_ty && eat("struct")) {
@@ -1465,6 +1502,8 @@ static void p_decl(int scope, void *ctx) {
         err_at(&pos, "expected type specifier");
     if (storage && scope != Decl_Global)
         err_at(&pos, "storage class specifier is not allowed here");
+    if (is_unsigned && !is_integer_ty(base_ty))
+        err_at(&pos, "unsigned specifier used with non-integer type");
 
     for (int n_declarators = 0;; n_declarators++) {
         struct ty *ty = base_ty;
@@ -1585,22 +1624,22 @@ static void p_decl(int scope, void *ctx) {
 static int next_loop_id, next_cond_id, next_str_id;
 
 static const char *get_str_op(struct ty *ty) {
-    if (ty->kind == Ty_Char)
+    if (ty->kind == Ty_Integer && ty->width == 1)
         return "strb w";
-    else if (ty->kind == Ty_Int)
+    else if (ty->kind == Ty_Integer && ty->width == 4)
         return "str w";
-    else if (ty->kind == Ty_Long || ty->kind == Ty_Ptr)
+    else if (ty->kind == Ty_Integer && ty->width == 8 || ty->kind == Ty_Ptr)
         return "str x";
     else
         die("get_str_op: unreachable: %d", ty->kind);
 }
 
 static const char *get_ldr_op(struct ty *ty) {
-    if (ty->kind == Ty_Char)
-        return "ldrsb x";
-    else if (ty->kind == Ty_Int)
-        return "ldrsw x";
-    else if (ty->kind == Ty_Long || ty->kind == Ty_Ptr)
+    if (ty->kind == Ty_Integer && ty->width == 1)
+        return ty->is_signed ? "ldrsb x" : "ldrb w";
+    else if (ty->kind == Ty_Integer && ty->width == 4)
+        return ty->is_signed ? "ldrsw x" : "ldr w";
+    else if (ty->kind == Ty_Integer && ty->width == 8 || ty->kind == Ty_Ptr)
         return "ldr x";
     else
         die("get_ldr_op: unreachable: %d", ty->kind);
@@ -1656,15 +1695,19 @@ static void emit_frame_store(struct ty *ty, int offs, int reg) {
 }
 
 static void emit_sext(struct ty *ty, int reg) {
-    if (ty->kind == Ty_Char) {
+    if (ty == char_ty && ty->is_signed) {
         writef(stdout, "sxtb x%d, w%d\n", reg, reg);
-    } else if (ty->kind == Ty_Int) {
+    } else if (ty == int_ty) {
         writef(stdout, "sxtw x%d, w%d\n", reg, reg);
     }
 }
 
 static void emit_expr(struct expr *e);
 static void emit_place_expr(struct expr *e);
+
+static const char *pick_sign_op(struct expr *e, const char *sop, const char *uop) {
+    return is_ptr_ty(e->subs[0]->ty) || is_integer_ty(e->subs[0]->ty) && e->subs[0]->ty->is_signed ? sop : uop;
+}
 
 static void emit_bin_subs(struct expr *e) {
     emit_expr(e->subs[0]);
@@ -1675,10 +1718,9 @@ static void emit_bin_subs(struct expr *e) {
 }
 
 static void emit_cmp_expr(struct expr *e, const char *cond, const char *ucond) {
-    cond = is_ptr_ty(e->subs[0]->ty) ? ucond : cond;
     emit_bin_subs(e);
     writef(stdout, "cmp x0, x1\n");
-    writef(stdout, "cset x0, %s\n", cond);
+    writef(stdout, "cset x0, %s\n", pick_sign_op(e, cond, ucond));
 }
 
 static void emit_arith_expr(struct expr *e, const char *op) {
@@ -1779,10 +1821,10 @@ static void emit_expr(struct expr *e) {
         emit_sext(e->ty, 0);
     } else if (e->kind == Expr_Mod) {
         emit_bin_subs(e);
-        writef(stdout, "sdiv x3, x0, x1\n");
+        writef(stdout, "%s x3, x0, x1\n", pick_sign_op(e, "sdiv", "udiv"));
         writef(stdout, "msub x0, x3, x1, x0\n");
     } else if (e->kind == Expr_Div) {
-        emit_arith_expr(e, "sdiv");
+        emit_arith_expr(e, pick_sign_op(e, "sdiv", "udiv"));
     } else if (e->kind == Expr_Mul) {
         emit_arith_expr(e, "mul");
     } else if (e->kind == Expr_Sub) {
@@ -1790,7 +1832,7 @@ static void emit_expr(struct expr *e) {
     } else if (e->kind == Expr_Add) {
         emit_arith_expr(e, "add");
     } else if (e->kind == Expr_Shr) {
-        emit_arith_expr(e, "asr");
+        emit_arith_expr(e, pick_sign_op(e, "asr", "lsr"));
     } else if (e->kind == Expr_Shl) {
         emit_arith_expr(e, "lsl");
     } else if (e->kind == Expr_Le) {

@@ -34,11 +34,11 @@ int close(int fd) {
     return (int)set_errno(_do_syscall(Sys_Close, fd));
 }
 
-long read(int fd, void *buf, long nbyte) {
+long read(int fd, void *buf, unsigned long nbyte) {
     return set_errno(_do_syscall(Sys_Read, fd, buf, nbyte));
 }
 
-long write(int fd, const void *buf, long nbyte) {
+long write(int fd, const void *buf, unsigned long nbyte) {
     return set_errno(_do_syscall(Sys_Write, fd, buf, nbyte));
 }
 

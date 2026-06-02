@@ -2,7 +2,7 @@
 //# exit: 0
 //# stdout: ok
 
-extern int write(int fd, const void *buf, int count);
+extern long write(int fd, const void *buf, unsigned long count);
 
 int main() {
     char text[3];

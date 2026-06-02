@@ -16,12 +16,12 @@ enum {
 
 extern int open(const char *pathname, int flags, int mode);
 extern int close(int fd);
-extern long write(int fd, const void *buf, long nbytes);
-extern long read(int fd, void *buf, long nbytes);
+extern long write(int fd, const void *buf, unsigned long nbytes);
+extern long read(int fd, void *buf, unsigned long nbytes);
 
 extern int strcmp(const char *s1, const char *s2);
-extern long strlen(const char *s);
-extern void *memset(void *s, int c, long n);
+extern unsigned long strlen(const char *s);
+extern void *memset(void *s, int c, unsigned long n);
 
 //==============================================================================
 //= impl
@@ -162,13 +162,13 @@ int fclose(struct file *stream) {
     return res;
 }
 
-long fwrite(const void *ptr, long size, long count, struct file *stream) {
-    long to_write = size * count;
+long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream) {
+    unsigned long to_write = size * count;
     if (to_write == 0)
         return 0;
     const char *buf = ptr;
 
-    long i = 0;
+    unsigned long i = 0;
     while (i < to_write) {
         if (stream->buf_len == FILE_BUF_CAP) {
             if (fflush(stream) == EOF) {
@@ -181,13 +181,13 @@ long fwrite(const void *ptr, long size, long count, struct file *stream) {
     return i / size;  // number of total objects written
 }
 
-long fread(void *ptr, long size, long count, struct file *stream) {
-    long to_read = size * count;
+long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream) {
+    unsigned long to_read = size * count;
     if (to_read == 0)
         return 0;
     char *buf = ptr;
 
-    long i = 0;
+    unsigned long i = 0;
     while (i < to_read) {
         if (stream->buf_pos == stream->buf_len) {
             stream->buf_pos = stream->buf_len = 0;

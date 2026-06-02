@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 from dataclasses import dataclass
+from difflib import unified_diff
 import json
 import os
 from pathlib import Path
@@ -152,6 +153,18 @@ def print_text_block(label: str, text: str) -> None:
     print()
 
 
+def print_text_diff(expected: str, actual: str, label: str) -> None:
+    expected_lines = expected.splitlines(keepends=True)
+    actual_lines = actual.splitlines(keepends=True)
+    diff = unified_diff(
+        expected_lines,
+        actual_lines,
+        fromfile=f"expected {label}",
+        tofile=f"actual {label}",
+    )
+    print("".join(diff) or "<no difference>")
+
+
 def default_exit_for(path: Path) -> int:
     return 1 if "bad" in path.parts else 0
 
@@ -265,20 +278,19 @@ def run_case(path: Path, update: bool) -> bool:
 
     if result.returncode != want_exit or stderr_failure or stdout_failure:
         print(f"{RED}FAIL{RESET}")
+
         if result.returncode != want_exit:
             print(f"Expected exit code: {want_exit}")
             print(f"Actual exit code:   {result.returncode}\n")
 
         if stderr_failure:
-            expected, actual = stderr_failure
-            print_text_block("Expected stderr", expected)
-            print_text_block("Actual stderr", actual)
+            print_text_diff(*stderr_failure, "stderr")
         else:
             print_text_block("stderr", actual_stderr)
+
         if stdout_failure:
-            expected, actual = stdout_failure
-            print_text_block("Expected stdout", expected)
-            print_text_block("Actual stdout", actual)
+            print_text_diff(*stdout_failure, "stdout")
+
         return False
 
     print(f"{GREEN}OK{RESET}")

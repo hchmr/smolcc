@@ -67,7 +67,7 @@ $(OUT_DIR)/%.o: $(SRC_DIR)/%.c | $(OUT_DIR)
 else
 # Use previous stage to compile this stage
 $(OUT_DIR)/%.s: $(SRC_DIR)/%.c | $(OUT_DIR)
-	$(SMOLCC1) < $< | ./scripts/asm-fmt > $@
+	bash -o pipefail -c "$(SMOLCC1) < $< | ./scripts/asm-fmt > $@"
 
 $(OUT_DIR)/%.o: $(OUT_DIR)/%.s | $(OUT_DIR)
 	$(CC) $(ASFLAGS) -c -o $@ $<

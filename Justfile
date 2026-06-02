@@ -1,5 +1,5 @@
 test *args:
-    make test ARGS="$*"
+    make test ARGS="{{args}}"
 
 bootstrap:
     make bootstrap

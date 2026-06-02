@@ -2,8 +2,8 @@
 //# mode: run
 //# exit: 0
 
-extern int strcmp(const char *lhs, const char *rhs);
-extern int strncmp(const char *lhs, const char *rhs, int n);
+extern unsigned long strcmp(const char *lhs, const char *rhs);
+extern unsigned long strncmp(const char *lhs, const char *rhs, unsigned long n);
 
 int main() {
     char s[2];
