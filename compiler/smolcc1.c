@@ -84,6 +84,13 @@ static int str_eq(const char *a, const char *b) {
     return *a == *b;
 }
 
+static int mem_eq(const char *a, const char *b, unsigned long n) {
+    for (unsigned long i = 0; i < n; i++)
+        if (a[i] != b[i])
+            return 0;
+    return 1;
+}
+
 static int align_up(int n, int align) {
     return (n + align - 1) / align * align;
 }
@@ -141,7 +148,7 @@ static struct string {
 
 static struct string *intern(const char *s, int len) {
     for (struct string *str = strings; str; str = str->next)
-        if (len == str->len && str_eq(str->chars, s))
+        if (len == str->len && mem_eq(str->chars, s, len))
             return str;
     struct string *mk_str = alloc(sizeof(struct string));
     mk_str->chars = mem_clone((void *)s, len + 1);
@@ -1793,6 +1800,8 @@ static void emit_expr(struct expr *e) {
         emit_expr(e->subs[0]);
         if (ty_size(to) < ty_size(from) && ty_size(to) == 1) {
             writef(stdout, "%s %c0, %c0\n", to == char_ty ? "sxtb" : "uxtb", X(to), X(to));
+        } else if (ty_size(to) < ty_size(from) && ty_size(to) == 4) {
+            writef(stdout, "mov %c0, %c0\n", X(to), X(to));
         } else if (ty_size(to) > ty_size(from) && ty_size(from) == 1) {
             writef(stdout, "%s %c0, %c0\n", from == char_ty ? "sxtb" : "uxtb", X(to), X(from));
         } else if (ty_size(to) > ty_size(from) && ty_size(from) == 4) {
@@ -1829,14 +1838,15 @@ static void emit_expr(struct expr *e) {
     } else if (e->kind == Expr_BitOr) {
         emit_arith_expr(e, "orr");
     } else if (e->kind == Expr_And || e->kind == Expr_Or) {
+        struct ty *t1 = e->subs[0]->ty, *t2 = e->subs[1]->ty;
         const char *cond = e->kind == Expr_And ? "z" : "nz";
         int cond_id = next_cond_id++;
         emit_expr(e->subs[0]);
-        writef(stdout, "cb%s x0, .L.cond.%d.short\n", cond, cond_id);
+        writef(stdout, "cb%s %c0, .L.cond.%d.short\n", cond, X(t1), cond_id);
         emit_expr(e->subs[1]);
         writef(stdout, ".L.cond.%d.short:\n", cond_id);
-        writef(stdout, "cmp x0, #0\n");
-        writef(stdout, "cset x0, ne\n");
+        writef(stdout, "cmp %c0, #0\n", X(t2));
+        writef(stdout, "cset %c0, ne\n", X(t2));
     } else if (e->kind == Expr_PtrAdd || e->kind == Expr_PtrSub) {
         const char *op = e->kind == Expr_PtrAdd ? "add" : "sub";
         int size = ty_size(e->subs[0]->ty->base);
@@ -1857,7 +1867,7 @@ static void emit_expr(struct expr *e) {
     } else if (e->kind == Expr_Cond) {
         int cond_id = next_cond_id++;
         emit_expr(e->subs[0]);
-        writef(stdout, "cbz x0, .L.cond.%d.else\n", cond_id);
+        writef(stdout, "cbz %c0, .L.cond.%d.else\n", X(e->subs[0]->ty), cond_id);
         emit_expr(e->subs[1]);
         writef(stdout, "b .L.cond.%d.end\n", cond_id);
         writef(stdout, ".L.cond.%d.else:\n", cond_id);
@@ -1922,7 +1932,7 @@ static void emit_stmt(struct stmt *s) {
     } else if (s->kind == Stmt_If) {
         int cond_id = next_cond_id++;
         emit_expr(s->expr);
-        writef(stdout, "cbz x0, .L.if.%d.else\n", cond_id);
+        writef(stdout, "cbz %c0, .L.if.%d.else\n", X(s->expr->ty), cond_id);
         emit_stmt(s->sub);
         writef(stdout, "b .L.if.%d.end\n", cond_id);
         writef(stdout, ".L.if.%d.else:\n", cond_id);
@@ -1941,7 +1951,7 @@ static void emit_stmt(struct stmt *s) {
         writef(stdout, ".L.loop.%d.cond:\n", s->loop_id);
         if (s->expr) {
             emit_expr(s->expr);
-            writef(stdout, "cbnz x0, .L.loop.%d.body\n", s->loop_id);
+            writef(stdout, "cbnz %c0, .L.loop.%d.body\n", X(s->expr->ty), s->loop_id);
         } else {
             writef(stdout, "b .L.loop.%d.body\n", s->loop_id);
         }
