@@ -635,7 +635,6 @@ static unsigned long const_cast(struct ty *target, unsigned long a) {
 }
 
 static unsigned long eval(struct expr *e) {
-    int is_signed = is_integer_ty(e->ty) && e->ty->is_signed;
     if (e->kind == Expr_Num) {
         return e->int_val;
     } else if (e->kind == Expr_Neg) {
@@ -650,7 +649,7 @@ static unsigned long eval(struct expr *e) {
         return const_cast(e->ty, eval(e->subs[0]) * eval(e->subs[1]));
     } else if (e->kind == Expr_Shl) {
         return const_cast(e->ty, eval(e->subs[0]) << eval(e->subs[1]));
-    } else if (e->kind == Expr_Shr && is_signed) {
+    } else if (e->kind == Expr_Shr && e->ty->is_signed) {
         return const_cast(e->ty, (long)eval(e->subs[0]) >> eval(e->subs[1]));
     } else if (e->kind == Expr_Shr) {
         return const_cast(e->ty, eval(e->subs[0]) >> eval(e->subs[1]));
@@ -702,7 +701,6 @@ static struct ty *integer_promo_ty(struct ty *t1, struct ty *t2) {
 }
 
 static void apply_ua_conv(struct expr **args) {
-    assert("apply_ua_conv", is_integer_ty(args[0]->ty) && is_integer_ty(args[1]->ty));
     struct ty *target_ty = integer_promo_ty(args[0]->ty, args[1]->ty);
     args[0] = cast_to(target_ty, args[0]);
     args[1] = cast_to(target_ty, args[1]);
@@ -973,7 +971,7 @@ static char tok_str[MAX_TOK_LEN + 1];
 static int tok_len;
 static struct {
     unsigned long n;
-    int u, l; // suffixes: unsigned, long
+    int u, l;  // suffixes: unsigned, long
     char str[MAX_TOK_LEN + 1];
 } tok_val;
 
@@ -1151,7 +1149,7 @@ enum {
     Prec_Mul,
     Prec_Unary,
     Prec_Postfix,
-    Prec_Primary,
+    Prec_Primary
 };
 
 static struct expr *p_expr(int rbp);
@@ -1623,26 +1621,9 @@ static void p_decl(int scope, void *ctx) {
 
 static int next_loop_id, next_cond_id, next_str_id;
 
-static const char *get_str_op(struct ty *ty) {
-    if (ty->kind == Ty_Integer && ty->width == 1)
-        return "strb w";
-    else if (ty->kind == Ty_Integer && ty->width == 4)
-        return "str w";
-    else if (ty->kind == Ty_Integer && ty->width == 8 || ty->kind == Ty_Ptr)
-        return "str x";
-    else
-        die("get_str_op: unreachable: %d", ty->kind);
-}
-
-static const char *get_ldr_op(struct ty *ty) {
-    if (ty->kind == Ty_Integer && ty->width == 1)
-        return ty->is_signed ? "ldrsb x" : "ldrb w";
-    else if (ty->kind == Ty_Integer && ty->width == 4)
-        return ty->is_signed ? "ldrsw x" : "ldr w";
-    else if (ty->kind == Ty_Integer && ty->width == 8 || ty->kind == Ty_Ptr)
-        return "ldr x";
-    else
-        die("get_ldr_op: unreachable: %d", ty->kind);
+// register class
+static char X(struct ty *ty) {
+    return ty_size(ty) == 8 ? 'x' : 'w';
 }
 
 static void emit_str_load(struct string *str) {
@@ -1654,16 +1635,16 @@ static void emit_str_load(struct string *str) {
     writef(stdout, "add x0, x0, :lo12:.L.str.%d\n", str->label);
 }
 
-static void emit_int_load(long val, int reg) {
-    long chunk_mask = (1 << 16) - 1;
+static void emit_int_load(struct ty *ty, long val, int reg) {
+    long chunk_mask = ~0U >> 16;
     long default_chunk = val < 0 ? chunk_mask : 0;
-    for (int i = 0; i < 4; i++, val = val >> 16) {
+    for (int i = 0; i * 2 < ty_size(ty); i++, val = val >> 16) {
         long chunk = val & chunk_mask;
         if (i == 0) {
             chunk = val < 0 ? chunk | ~chunk_mask : chunk;
-            writef(stdout, "mov x%d, #%d // %ld\n", reg, chunk, val);
+            writef(stdout, "mov %c%d, #%d // %ld\n", X(ty), reg, chunk, val);
         } else if (chunk != default_chunk) {
-            writef(stdout, "movk x%d, #%d, lsl #%ld\n", reg, chunk, i * 16);
+            writef(stdout, "movk %c%d, #%d, lsl #%ld\n", X(ty), reg, chunk, i * 16);
         }
     }
 }
@@ -1677,15 +1658,17 @@ static void emit_pop(int reg) {
 }
 
 static void emit_load(struct ty *ty, int dst, int src) {
-    writef(stdout, "%s%d, [x%d]\n", get_ldr_op(ty), dst, src);
+    const char *op = ty == char_ty && char_ty->is_signed ? "ldrsb" : ty == uchar_ty ? "ldrb" : "ldr";
+    writef(stdout, "%s %c%d, [x%d]\n", op, X(ty), dst, src);
 }
 
 static void emit_store(struct ty *ty, int src, int dst) {
-    writef(stdout, "%s%d, [x%d]\n", get_str_op(ty), src, dst);
+    const char *op = ty == char_ty || ty == uchar_ty ? "strb" : "str";
+    writef(stdout, "%s %c%d, [x%d]\n", op, X(ty), src, dst);
 }
 
 static void emit_frame_addr(int offs, int reg) {
-    emit_int_load(offs, reg);
+    emit_int_load(long_ty, offs, reg);
     writef(stdout, "add x%d, x29, x%d\n", reg, reg);
 }
 
@@ -1694,38 +1677,28 @@ static void emit_frame_store(struct ty *ty, int offs, int reg) {
     emit_store(ty, reg, 9);
 }
 
-static void emit_sext(struct ty *ty, int reg) {
-    if (ty == char_ty && ty->is_signed) {
-        writef(stdout, "sxtb x%d, w%d\n", reg, reg);
-    } else if (ty == int_ty) {
-        writef(stdout, "sxtw x%d, w%d\n", reg, reg);
-    }
-}
-
 static void emit_expr(struct expr *e);
 static void emit_place_expr(struct expr *e);
 
-static const char *pick_sign_op(struct expr *e, const char *sop, const char *uop) {
-    return is_ptr_ty(e->subs[0]->ty) || is_integer_ty(e->subs[0]->ty) && e->subs[0]->ty->is_signed ? sop : uop;
-}
-
-static void emit_bin_subs(struct expr *e) {
-    emit_expr(e->subs[0]);
+static void emit_bin_subs(struct expr *e1, struct expr *e2) {
+    emit_expr(e1);
     emit_push(0);
-    emit_expr(e->subs[1]);
-    writef(stdout, "mov x1, x0\n");
+    emit_expr(e2);
+    writef(stdout, "mov %c1, %c0\n", X(e1->ty), X(e1->ty));
     emit_pop(0);
 }
 
 static void emit_cmp_expr(struct expr *e, const char *cond, const char *ucond) {
-    emit_bin_subs(e);
-    writef(stdout, "cmp x0, x1\n");
-    writef(stdout, "cset x0, %s\n", pick_sign_op(e, cond, ucond));
+    struct ty *ty = e->subs[0]->ty;
+    emit_bin_subs(e->subs[0], e->subs[1]);
+    writef(stdout, "cmp %c0, %c1\n", X(ty), X(ty));
+    writef(stdout, "cset %c0, %s\n", X(ty), ty->is_signed ? cond : ucond);
 }
 
 static void emit_arith_expr(struct expr *e, const char *op) {
-    emit_bin_subs(e);
-    writef(stdout, "%s x0, x0, x1\n", op);
+    struct ty *ty = e->subs[0]->ty;
+    emit_bin_subs(e->subs[0], e->subs[1]);
+    writef(stdout, "%s %c0, %c0, %c1\n", op, X(ty), X(ty), X(ty));
 }
 
 static void emit_assign_to_addr(struct ty *dst_ty, struct expr *e) {
@@ -1747,7 +1720,7 @@ static void emit_assign_to_addr(struct ty *dst_ty, struct expr *e) {
         }
         writef(stdout, "mov x1, x0\n");
         emit_pop(0);
-        emit_int_load(ty_size(dst_ty), 2);
+        emit_int_load(long_ty, ty_size(dst_ty), 2);
         writef(stdout, "bl _memcpy\n");
     }
 }
@@ -1770,7 +1743,7 @@ static void emit_place_expr(struct expr *e) {
         }
     } else if (e->kind == Expr_Member) {
         emit_place_expr(e->subs[0]);
-        emit_int_load(e->sym->offs, 1);
+        emit_int_load(long_ty, e->sym->offs, 1);
         writef(stdout, "add x0, x0, x1\n");
     } else if (e->kind == Expr_Assign || e->kind == Expr_Comma) {
         emit_expr(e);
@@ -1784,47 +1757,53 @@ static void emit_place_expr(struct expr *e) {
 }
 
 static void emit_expr(struct expr *e) {
+    struct ty *ty = e->ty;
     if (is_lvalue(e)) {
         emit_place_expr(e);
-        if (is_scalar(e->ty)) {
-            emit_load(e->ty, 0, 0);
+        if (is_scalar(ty)) {
+            emit_load(ty, 0, 0);
         }
     } else if (e->kind == Expr_Num) {
-        emit_int_load(e->int_val, 0);
+        emit_int_load(ty, e->int_val, 0);
     } else if (e->kind == Expr_Str) {
         emit_str_load(e->str_val);
     } else if (e->kind == Expr_PostDec || e->kind == Expr_PostInc) {
         const char *op = e->kind == Expr_PostInc ? "add" : "sub";
-        int step = is_ptr_ty(e->ty) ? ty_size(e->ty->base) : 1;
+        int step = is_ptr_ty(ty) ? ty_size(ty->base) : 1;
         emit_place_expr(e->subs[0]);
         writef(stdout, "mov x2, x0\n");
-        emit_load(e->ty, 0, 0);
-        emit_int_load(step, 1);
-        writef(stdout, "%s x1, x0, x1\n", op);
-        emit_store(e->ty, 1, 2);
+        emit_load(ty, 0, 0);
+        emit_int_load(ty, step, 1);
+        writef(stdout, "%s %c1, %c0, %c1\n", op, X(ty), X(ty), X(ty));
+        emit_store(ty, 1, 2);
     } else if (e->kind == Expr_Addr) {
         emit_place_expr(e->subs[0]);
     } else if (e->kind == Expr_BitNot) {
         emit_expr(e->subs[0]);
-        writef(stdout, "mvn x0, x0\n");
+        writef(stdout, "mvn %c0, %c0\n", X(ty), X(ty));
     } else if (e->kind == Expr_Not) {
         emit_expr(e->subs[0]);
-        writef(stdout, "cmp x0, #0\n");
-        writef(stdout, "cset x0, eq\n");
+        writef(stdout, "cmp %c0, #0\n", X(ty));
+        writef(stdout, "cset %c0, eq\n", X(ty));
     } else if (e->kind == Expr_Neg) {
         emit_expr(e->subs[0]);
-        writef(stdout, "neg x0, x0\n");
+        writef(stdout, "neg %c0, %c0\n", X(ty), X(ty));
     } else if (e->kind == Expr_Cast) {
-        // values in registers are always full width, so
-        // narrowing casts can simply truncate the value.
+        struct ty *to = e->ty, *from = e->subs[0]->ty;
         emit_expr(e->subs[0]);
-        emit_sext(e->ty, 0);
+        if (ty_size(to) < ty_size(from) && ty_size(to) == 1) {
+            writef(stdout, "%s %c0, %c0\n", to == char_ty ? "sxtb" : "uxtb", X(to), X(to));
+        } else if (ty_size(to) > ty_size(from) && ty_size(from) == 1) {
+            writef(stdout, "%s %c0, %c0\n", from == char_ty ? "sxtb" : "uxtb", X(to), X(from));
+        } else if (ty_size(to) > ty_size(from) && ty_size(from) == 4) {
+            writef(stdout, "%s %c0, %c0\n", from == int_ty ? "sxtw" : "uxtw", X(to), X(from));
+        }
     } else if (e->kind == Expr_Mod) {
-        emit_bin_subs(e);
-        writef(stdout, "%s x3, x0, x1\n", pick_sign_op(e, "sdiv", "udiv"));
-        writef(stdout, "msub x0, x3, x1, x0\n");
+        emit_bin_subs(e->subs[0], e->subs[1]);
+        writef(stdout, "%s %c2, %c0, %c1\n", ty->is_signed ? "sdiv" : "udiv", X(ty), X(ty), X(ty));
+        writef(stdout, "msub %c0, %c2, %c1, %c0\n", X(ty), X(ty), X(ty), X(ty));
     } else if (e->kind == Expr_Div) {
-        emit_arith_expr(e, pick_sign_op(e, "sdiv", "udiv"));
+        emit_arith_expr(e, ty->is_signed ? "sdiv" : "udiv");
     } else if (e->kind == Expr_Mul) {
         emit_arith_expr(e, "mul");
     } else if (e->kind == Expr_Sub) {
@@ -1832,7 +1811,7 @@ static void emit_expr(struct expr *e) {
     } else if (e->kind == Expr_Add) {
         emit_arith_expr(e, "add");
     } else if (e->kind == Expr_Shr) {
-        emit_arith_expr(e, pick_sign_op(e, "asr", "lsr"));
+        emit_arith_expr(e, ty->is_signed ? "asr" : "lsr");
     } else if (e->kind == Expr_Shl) {
         emit_arith_expr(e, "lsl");
     } else if (e->kind == Expr_Le) {
@@ -1861,18 +1840,18 @@ static void emit_expr(struct expr *e) {
     } else if (e->kind == Expr_PtrAdd || e->kind == Expr_PtrSub) {
         const char *op = e->kind == Expr_PtrAdd ? "add" : "sub";
         int size = ty_size(e->subs[0]->ty->base);
-        emit_bin_subs(e);
+        emit_bin_subs(e->subs[0], e->subs[1]);
         if (size != 1) {
-            emit_int_load(size, 2);
+            emit_int_load(long_ty, size, 2);
             writef(stdout, "mul x1, x1, x2\n");
         }
         writef(stdout, "%s x0, x0, x1\n", op);
     } else if (e->kind == Expr_PtrDiff) {
         int size = ty_size(e->subs[0]->ty->base);
-        emit_bin_subs(e);
+        emit_bin_subs(e->subs[0], e->subs[1]);
         writef(stdout, "sub x0, x0, x1\n");
         if (size != 1) {
-            emit_int_load(size, 1);
+            emit_int_load(long_ty, size, 1);
             writef(stdout, "sdiv x0, x0, x1\n");
         }
     } else if (e->kind == Expr_Cond) {
@@ -1886,7 +1865,7 @@ static void emit_expr(struct expr *e) {
         writef(stdout, ".L.cond.%d.end:\n", cond_id);
     } else if (e->kind == Expr_Assign) {
         emit_place_expr(e->subs[0]);
-        emit_assign_to_addr(e->ty, e->subs[1]);
+        emit_assign_to_addr(ty, e->subs[1]);
     } else if (e->kind == Expr_Call) {
         struct expr *fn = e->subs[0];
         assert("emit_scalar_expr: func", fn->kind == Expr_Addr && fn->subs[0]->kind == Expr_Func);
@@ -1898,9 +1877,6 @@ static void emit_expr(struct expr *e) {
             emit_pop(i - 1);
         }
         writef(stdout, "bl %s\n", fn->subs[0]->sym->name);
-        // Normalize the result by sign-extending in case this
-        // is a foreign function returning its result in w0.
-        emit_sext(e->ty, 0);
     } else if (e->kind == Expr_Comma) {
         emit_expr(e->subs[0]), emit_expr(e->subs[1]);
     } else if (e->kind == Expr_VaStart) {
@@ -1916,6 +1892,7 @@ static void emit_expr(struct expr *e) {
     } else if (e->kind == Expr_VaArg) {
         emit_place_expr(e->subs[0]);
         writef(stdout, "bl _va_arg\n");
+        emit_load(e->ty, 0, 0);
     } else {
         die("emit_scalar_expr: unreachable: %d", e->kind);
     }
@@ -2061,7 +2038,7 @@ static void emit_rt_helpers() {
     writef(stdout, "_va_arg:\n");
     writef(stdout, "ldrsw x1, [x0, #24]  // gr_offs\n");
     writef(stdout, "ldr x2, [x0, #8]  // gr_top\n");
-    writef(stdout, "ldr x3, [x2, x1]\n");
+    writef(stdout, "add x3, x2, x1\n");
     writef(stdout, "add w1, w1, #8\n");
     writef(stdout, "str w1, [x0, #24]\n");
     writef(stdout, "mov x0, x3\n");
