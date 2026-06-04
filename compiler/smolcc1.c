@@ -1184,9 +1184,8 @@ static struct expr *p_expr(int rbp) {
     } else if (tok == Tok_Num) {
         acc = mk_expr(&pos, Expr_Num, 0);
         acc->int_val = tok_val.n;
-        acc->ty = tok_val.u ? (tok_val.l ? ulong_ty : uint_ty) : (tok_val.l ? long_ty : int_ty);
-        if ((long)const_cast(acc->ty, acc->int_val) != acc->int_val)
-            err_at(&pos, "integer literal overflow");
+        acc->ty = tok_val.u ? (tok_val.l || tok_val.n > ~0U ? ulong_ty : uint_ty)
+                            : (tok_val.l || tok_val.n > ~(1U << 31) ? long_ty : int_ty);
         lex();
     } else if (tok == Tok_Str) {
         acc = mk_expr(&pos, Expr_Str, 0);
