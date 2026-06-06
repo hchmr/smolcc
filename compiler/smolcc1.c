@@ -484,13 +484,8 @@ static struct sym *declare(struct pos *pos, struct sym *parent_sym, int kind, in
     sym->storage = storage;
     if (parent_sym && (kind == Sym_Local || kind == Sym_Field)) {
         int size = ty_size(ty), align = ty_align(ty);
-        if (kind == Sym_Local) {
-            sym->offs = -align_up(parent_sym->size + size, align);
-            parent_sym->size = -sym->offs;
-        } else {
-            sym->offs = align_up(parent_sym->size, align);
-            parent_sym->size = sym->offs + size;
-        }
+        sym->offs = align_up(parent_sym->size, align);
+        parent_sym->size = sym->offs + size;
 
         if (parent_sym->align < align) {
             parent_sym->align = align;
@@ -1580,11 +1575,19 @@ static void p_decl(int scope, void *ctx) {
             struct sym *sym = declare(&name_pos, 0, Sym_Func, storage, name, ty, has_func_body);
             if (has_func_body) {
                 sym->scope = push_scope();
+
+                sym->size = 16;  // frame record
+
                 for (int i = 0; i < n_params; i++) {
                     struct sym *param =
                         declare(&params[i]->last_pos, sym, Sym_Local, 0, params[i]->name, params[i]->ty, 1);
                     sym->last_param = param;
                 }
+
+                sym->va_offs = align_up(sym->size, ty_align(va_list_ty));
+                sym->va_size = sym->ty->is_va ? ty_size(long_ty) * (MAX_FUNC_PARAMS - n_params) : 0;
+                sym->size = sym->va_offs + sym->va_size;
+
                 curr_func = sym;
                 sym->body = p_stmt();
                 curr_func = 0;
@@ -1968,20 +1971,17 @@ static void emit_stmt(struct stmt *s) {
 
 static void emit_func(struct sym *func) {
     curr_func = func;
-    int n_va_args = func->ty->is_va ? 8 - func->ty->n_params : 0;
-    func->va_offs = -align_up(curr_func->size + n_va_args * 8, 8);
-    func->va_size = n_va_args * 8;
-    curr_func->size = align_up(-func->va_offs, 16);
-
+    curr_func->size = align_up(curr_func->size, 16);
     writef(stdout, ".section .text\n");
     if (func->storage != Static) {
         writef(stdout, ".globl %s\n", func->name);
     }
     writef(stdout, "%s:\n", func->name);
     // prologue
+    emit_int_load(long_ty, curr_func->size - 16, 9);
+    writef(stdout, "sub sp, sp, x9\n");
     writef(stdout, "stp x29, x30, [sp, #-16]!\n");
     writef(stdout, "mov x29, sp\n");
-    writef(stdout, "sub sp, sp, #%d\n", curr_func->size);
     struct sym *sym = func->scope->head;
     for (int i = 0; i < func->ty->n_params; i++, sym = sym->next) {
         emit_frame_store(sym->ty, sym->offs, i);
@@ -1993,8 +1993,9 @@ static void emit_func(struct sym *func) {
     emit_stmt(func->body);
     // epilogue
     writef(stdout, ".L.return.%s:\n", func->name);
-    writef(stdout, "mov sp, x29\n");
+    emit_int_load(long_ty, curr_func->size - 16, 9);
     writef(stdout, "ldp x29, x30, [sp], #16\n");
+    writef(stdout, "add sp, sp, x9\n");
     writef(stdout, "ret\n");
     curr_func = 0;
 }
