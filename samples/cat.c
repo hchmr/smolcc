@@ -11,8 +11,8 @@ extern struct file *stdin, *stdout, *stderr;
 extern struct file *fopen(const char *filename, const char *mode);
 extern int fclose(struct file *stream);
 extern int ferror(struct file *stream);
-extern long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream);
-extern long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
+extern unsigned long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream);
+extern unsigned long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 extern int fprintf(struct file *stream, const char *format, ...);
 
 // errno
@@ -37,7 +37,7 @@ static void file_error(const char *filename) {
 }
 
 static void cat(const char *filename, struct file *src) {
-    long n;
+    unsigned long n;
     while ((n = fread(rdbuf, 1, BUF_SIZE, src)) > 0) {
         if (fwrite(rdbuf, 1, n, stdout) < n) {
             file_error(filename);

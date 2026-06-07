@@ -4,8 +4,8 @@
 struct file;
 
 extern struct file *stdin, *stdout;
-extern long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream);
-extern long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
+extern unsigned long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream);
+extern unsigned long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 
 int main() {
     char buf[4];

@@ -6,7 +6,7 @@
 enum { EOF = -1 };
 extern struct file *stdout;
 extern int fputc(int c, struct file *stream);
-extern long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
+extern unsigned long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 
 extern unsigned long strlen(const char *s);
 extern const char *strchr(const char *s, int c);
@@ -80,8 +80,8 @@ static char *int_to_oct(unsigned long n, char *buf, int buf_len) {
     return p;
 }
 
-static const char *sscan_int(const char *s, int *out) {
-    int n = 0;
+static const char *sscan_int(const char *s, unsigned int *out) {
+    unsigned int n = 0;
     while (isdigit(*s)) {
         n = n * 10 + (*s - '0');
         s++;
@@ -123,11 +123,11 @@ struct fmt_spec {
     int type;
     int flags;
     int base;
-    int min_width;
+    unsigned int min_width;
 
     // for FMT_LIT
     const char *lit;
-    int lit_len;
+    unsigned int lit_len;
 };
 
 static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
@@ -195,7 +195,7 @@ static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
         }
         fmt++;
     } else {
-        int len = 0;
+        unsigned int len = 0;
         for (len = 0; fmt[len] && fmt[len] != '%'; len++)
             ;
         spec->type = FMT_LIT;
@@ -217,7 +217,7 @@ static int fill(struct file *stream, char c, int count) {
 
 static int fmt_int(struct file *stream, struct fmt_spec *spec, unsigned long n) {
     const char *prefix = "";
-    int prefix_len = 0;
+    unsigned int prefix_len = 0;
     int is_signed = spec->type != FMT_UINT && spec->type != FMT_ULONG;
     if (spec->base == 10 && is_signed) {
         if ((long)n < 0) {
@@ -257,11 +257,11 @@ static int fmt_int(struct file *stream, struct fmt_spec *spec, unsigned long n) 
     if (*num_str == '-') {
         num_str++;  // remove '-'
     }
-    int num_len = num_str_end - num_str;
+    unsigned int num_len = num_str_end - num_str;
 
-    int width = prefix_len + num_len;
+    unsigned int width = prefix_len + num_len;
 
-    int pad_width = spec->min_width > width ? spec->min_width - width : 0;
+    unsigned int pad_width = spec->min_width > width ? spec->min_width - width : 0;
     int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;
     int pad_chr = !pad_right && spec->flags & FMT_FLAGS_ZEROPAD ? '0' : ' ';
 
@@ -287,7 +287,7 @@ static int fmt_int(struct file *stream, struct fmt_spec *spec, unsigned long n) 
     return width + pad_width;
 }
 
-static int fmt_lit(struct file *stream, const char *s, int len) {
+static int fmt_lit(struct file *stream, const char *s, unsigned long len) {
     if (fwrite(s, 1, len, stream) < len)
         return -1;
     return len;
@@ -297,7 +297,7 @@ static int fmt_str(struct file *stream, struct fmt_spec *spec, const char *s) {
     if (s == 0) {
         s = "(null)";
     }
-    int len = strlen(s);
+    unsigned long len = strlen(s);
 
     int pad_width = spec->min_width > len ? spec->min_width - len : 0;
     int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;

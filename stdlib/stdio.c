@@ -168,7 +168,7 @@ int fclose(struct file *stream) {
     return res;
 }
 
-long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream) {
+unsigned long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream) {
     unsigned long to_write = size * count;
     if (to_write == 0)
         return 0;
@@ -187,7 +187,7 @@ long fwrite(const void *ptr, unsigned long size, unsigned long count, struct fil
     return i / size;  // number of total objects written
 }
 
-long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream) {
+unsigned long fread(void *ptr, unsigned long size, unsigned long count, struct file *stream) {
     unsigned long to_read = size * count;
     if (to_read == 0)
         return 0;
@@ -229,7 +229,7 @@ int putchar(int c) {
 }
 
 int puts(const char *s) {
-    long len = strlen(s);
+    unsigned long len = strlen(s);
     if (fwrite(s, 1, len, stdout) != len) {
         return EOF;
     }

@@ -6,17 +6,18 @@
 // stdlib
 
 extern void exit(int status);
-extern long strtol(const char *nptr, char **endptr, int base);
+extern unsigned long strtoul(const char *nptr, char **endptr, int base);
 
 // stdio
 
+enum { EOF = -1 };
 struct file;
 extern struct file *stdin, *stderr;
 extern struct file *fopen(const char *filename, const char *mode);
 extern int fclose(struct file *stream);
 extern int fprintf(struct file *stream, const char *format, ...);
 extern int printf(const char *format, ...);
-extern int fread(void *ptr, unsigned long size, unsigned long nmemb, struct file *stream);
+extern unsigned long fread(void *ptr, unsigned long size, unsigned long nmemb, struct file *stream);
 extern int ferror(struct file *stream);
 
 // ctype
@@ -43,67 +44,122 @@ int getopt(int argc, char **argv, const char *optstring);
 
 enum { MAX_FILES = 64 };
 
-const char *progname;
-int canonical = 0;
+// file iter
 int nfiles;
 const char *files[MAX_FILES];
-long limit = -1;
+int fileno;
+const char *filename;
+struct file *file;
 
-void print_error(const char *filename) {
+// args
+const char *progname;
+int canonical = 0;
+unsigned long limit = ~0UL;
+
+// chunk
+enum { CHUNK_SIZE = 16 };
+unsigned char buf[CHUNK_SIZE + 1];
+
+// error count
+int nerr;
+
+void report_err(const char *filename) {
+    nerr++;
     fprintf(stderr, "%s: %s", progname, filename);
     perror("");
 }
 
-int hd(struct file *f) {
-    unsigned char buf[16 + 1];
-    unsigned long offset = 0;
-    int at_eof = 0;
-    while (!at_eof) {
-        unsigned long want = 16;
-        if (limit >= 0 && offset + want > (unsigned long)limit) {
-            want = limit - offset;
-            at_eof = 1;
+void next_file() {
+    if (file) {
+        if (fclose(file) != 0) {
+            report_err(filename);
         }
-        if (want == 0) {
+        file = 0;
+    }
+    while (1) {
+        if (fileno == nfiles)
+            break;
+        filename = files[fileno++];
+        file = fopen(filename, "rb");
+        if (file)
+            break;
+        report_err(filename);
+    }
+}
+
+int next_chunk(unsigned long offset) {
+    int want = CHUNK_SIZE;
+    if (offset + want > limit) {
+        want = (int)(limit - offset);
+    }
+
+    int pos = 0;
+    while (file && want) {
+        int n = (int)fread(buf + pos, 1, want, file);
+        if (n < want) {
+            if (ferror(file)) {
+                report_err(filename);
+            }
+            next_file();
+        }
+        want = want - n;
+        pos = pos + n;
+    }
+    return pos;
+}
+
+int format_chunk(unsigned long offset, int n) {
+    printf("%08lx ", offset);
+
+    for (int i = 0; i < CHUNK_SIZE; i++) {
+        if (i == 8)
+            printf(" ");
+        if (i < n)
+            printf(" %02x", buf[i]);
+        else
+            printf("   ");
+    }
+
+    if (canonical) {
+        for (int i = 0; i < n; i++) {
+            if (!isprint(buf[i])) {
+                buf[i] = '.';
+            }
+        }
+        buf[n] = '\0';
+        printf("  |%s|", buf);
+    }
+
+    printf("\n");
+}
+
+void hexdump() {
+    if (nfiles == 0) {
+        filename = "stdin";
+        file = stdin;
+    } else {
+        next_file();
+    }
+
+    unsigned long offset = 0;
+
+    while (offset < limit) {
+        int n = next_chunk(offset);
+        if (n == 0) {
             break;
         }
-        unsigned long n = fread(buf, 1, want, f);
-        if (n != want) {
-            if (ferror(f)) {
-                print_error("read");
-                return -1;
-            }
-            at_eof = 1;
-        }
-
-        printf("%08lx ", offset);
-        for (unsigned long i = 0; i < 16; i++) {
-            if (i == 8)
-                printf(" ");
-            if (i < n)
-                printf(" %02x", buf[i]);
-            else
-                printf("   ");
-        }
-        if (canonical) {
-            for (unsigned long i = 0; i < n; i++) {
-                if (!isprint(buf[i]))
-                    buf[i] = '.';
-            }
-            buf[n] = '\0';
-            printf("  |%s|", buf);
-        }
-        printf("\n");
+        format_chunk(offset, n);
         offset = offset + n;
     }
 
     printf("%08lx\n", offset);
-
-    return 0;
 }
 
+//------------------------------------------------------------------------------
+//- argparse
+
 void usage() {
-    fprintf(stderr, "usage: %s [-cCn] [file...]\n", progname);
+    fprintf(stderr, "usage: %s [-C] [-n <length>] [file...]\n", progname);
 }
 
 void arg_error() {
@@ -119,10 +175,10 @@ void argparse(int argc, char **argv) {
         if (opt == 'C') {
             canonical = 1;
         } else if (opt == 'n') {
-            char *endptr;
+            char *trailing;
             errno = 0;
-            limit = strtol(optarg, &endptr, 10);
-            if (errno || *endptr || limit < 0) {
+            limit = strtoul(optarg, &trailing, 10);
+            if (errno || *trailing) {
                 fprintf(stderr, "%s: invalid length limit: %s\n", progname, optarg);
                 arg_error();
             }
@@ -140,27 +196,13 @@ void argparse(int argc, char **argv) {
     }
 }
 
+//------------------------------------------------------------------------------
+//- main
+
 int main(int argc, char **argv) {
     argparse(argc, argv);
 
-    int res = 0;
-    if (nfiles == 0) {
-        res = hd(stdin);
-    } else {
-        for (int i = 0; i < nfiles; i++) {
-            struct file *f = fopen(files[i], "rb");
-            if (!f) {
-                print_error(files[i]);
-                res = -1;
-                continue;
-            }
-            res = res | hd(f);
-            if (fclose(f) != 0) {
-                print_error(files[i]);
-                res = -1;
-            }
-        }
-    }
+    hexdump();
 
-    return -res;
+    return !!nerr;
 }
