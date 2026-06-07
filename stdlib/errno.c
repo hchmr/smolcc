@@ -39,5 +39,9 @@ const char *strerror(int errnum) {
 
 void perror(const char *dscr) {
     struct error *err = _errlist_find(errno);
-    fprintf(stderr, "%s: %s\n", dscr, err ? err->dscr : "Unknown error");
+    if (err) {
+        fprintf(stderr, "%s: %s\n", dscr, err->dscr);
+    } else {
+        fprintf(stderr, "%s: Unknown error (%d)\n", dscr, errno);
+    }
 }

@@ -2,7 +2,12 @@
 
 set -e
 
-raw_tab=$(errno -l | sort -k 2,2n)
+if ! command -v errno > /dev/null; then
+    echo "warning: errno command not found. Generating empty errlist." >&2
+    raw_tab=""
+else
+    raw_tab=$(errno -l | sort -k 2,2n)
+fi
 
 echo '    .section .rodata'
 

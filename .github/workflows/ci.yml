@@ -15,6 +15,9 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: Install errno
+      run: sudo apt-get update && sudo apt-get install -y errno
+
     - name: Bootstrap
       run: make compiler
 
