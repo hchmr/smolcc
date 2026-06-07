@@ -24,6 +24,7 @@ RESET = "\033[0m"
 CC = "build/dist/bin/smolcc"
 CFLAGS: list[str] = []
 
+
 class Verbosity(enum.IntEnum):
     NORMAL = 0
     VERBOSE = 1
@@ -33,73 +34,110 @@ class Verbosity(enum.IntEnum):
 verbosity = Verbosity.NORMAL
 
 
+################################################################################
+# Spec
+
+
+DIRECTIVE_NAMES = {"description", "mode", "file", "args", "exit", "stderr", "stdout"}
+
+
+class SpecMode(enum.Enum):
+    COMPILE_ONLY = "compile-only"
+    RUN = "run"
+
+    @staticmethod
+    def try_from_str(value: str) -> "SpecMode | None":
+        if value not in {mode.value for mode in SpecMode}:
+            return None
+        return SpecMode(value)
+
+
 @dataclass
-class spec:
+class Spec:
+    file_type: str
+    file: Path | None
     description: str | None
     args: str | None
-    mode: str | None
+    mode: SpecMode | None
     exit_code: int | None
     stderr: str | None
     stdout: str | None
     body: str
 
 
-def parse_directive(line: str) -> tuple[str, str] | None:
-    match = re.fullmatch(
-        r"\s*//\s*#\s*(description|args|mode|exit|stderr|stdout)\s*:\s?(.*)", line
-    )
-    if match is None:
+def directive_prefix(file_type: str) -> str:
+    if file_type != "c":
+        return ""
+    return "//#"
+
+
+def parse_directive(file_type: str, line: str) -> tuple[str, str] | None:
+    prefix_pat = directive_prefix(file_type)
+    name_pat = "|".join(DIRECTIVE_NAMES)
+    directive_pat = rf"{prefix_pat}\s*({name_pat})\s*:\s?(.*)"
+
+    if not (match := re.fullmatch(directive_pat, line)):
         return None
     return match.group(1), match.group(2)
 
 
-def parse_output_line(path: Path, kind: str, value: str) -> str:
+def parse_line_val(path: Path, lineno: int, kind: str, value: str) -> str:
     if not value.startswith('"'):
         return value
 
     try:
         line = json.loads(value)
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"{path}: invalid {kind} directive {value!r}: {exc.msg}")
+        raise SystemExit(
+            f"{path}:{lineno}: invalid {kind} directive {value!r}: {exc.msg}"
+        )
 
     if not isinstance(line, str):
-        raise SystemExit(f"{path}: {kind} directive must decode to a string")
+        raise SystemExit(f"{path}:{lineno}: {kind} directive must decode to a string")
 
     return line
 
 
-def read_spec(path: Path) -> spec:
-    lines = path.read_text().splitlines(keepends=True)
-
+def parse_spec(path: Path, lines: list[str]) -> Spec:
+    file_type = path.suffix.lstrip(".")
     description = None
+    file = None
     args = None
     mode = None
     exit_code = None
     stderr_parts: list[str] = []
     stdout_parts: list[str] = []
     body_parts: list[str] = []
-    for raw_line in lines:
-        directive = parse_directive(raw_line.rstrip("\n"))
+    for lineno, raw_line in enumerate(lines, start=1):
+        directive = parse_directive(file_type, raw_line.rstrip("\n"))
 
         match directive:
             case ("description", value) if description is None:
                 description = value
+            case ("file", value) if file is None:
+                file = Path(value)
             case ("args", value) if args is None:
                 args = value
             case ("mode", value) if mode is None:
-                if value not in {"compile-only", "run"}:
-                    raise SystemExit(f"{path}: unsupported test mode {value!r}")
-                mode = value
+                if not (mode := SpecMode.try_from_str(value)):
+                    raise SystemExit(
+                        f"{path}:{lineno}: unsupported test mode {value!r}"
+                    )
             case ("exit", value) if exit_code is None:
                 exit_code = int(value)
             case ("stderr", value):
-                stderr_parts.append(parse_output_line(path, "stderr", value))
+                stderr_parts.append(parse_line_val(path, lineno, "stderr", value))
             case ("stdout", value):
-                stdout_parts.append(parse_output_line(path, "stdout", value))
+                stdout_parts.append(parse_line_val(path, lineno, "stdout", value))
             case _:
                 body_parts.append(raw_line)
 
-    return spec(
+    if file is None and file_type != "c":
+        raise SystemExit(f"{path}: missing required file directive")
+
+    return Spec(
+        file_type=file_type,
+        file=file,
         description=description,
         args=args,
         mode=mode,
@@ -110,38 +148,59 @@ def read_spec(path: Path) -> spec:
     )
 
 
-def format_output(prefix: str, text: str) -> list[str]:
-    if not text:
-        return []
+def unparse_line_val(line: str) -> str:
+    if line.startswith('"') or any(not (32 <= ord(c) <= 126) for c in line):
+        return json.dumps(line)
+    else:
+        return line
 
-    def should_quote(line: str) -> bool:
-        if line.startswith('"'):
-            return True
-        return any(ord(ch) < 32 and ch != "\t" for ch in line)
 
-    lines: list[str] = []
-    for line in text.splitlines():
-        rendered = json.dumps(line) if should_quote(line) else line
-        lines.append(f"{prefix}{rendered}\n")
+def unparse_spec(spec: Spec) -> list[str]:
+    directives: list[tuple[str, str]] = []
+
+    if spec.description is not None:
+        directives.append(("description", spec.description))
+    if spec.file is not None:
+        directives.append(("file", str(spec.file)))
+    if spec.mode is not None:
+        directives.append(("mode", spec.mode.value))
+    if spec.args is not None:
+        directives.append(("args", spec.args))
+    if spec.exit_code is not None:
+        directives.append(("exit", str(spec.exit_code)))
+    if spec.stderr is not None:
+        for line in spec.stderr.splitlines():
+            directives.append(("stderr", unparse_line_val(line)))
+    if spec.stdout is not None:
+        for line in spec.stdout.splitlines():
+            directives.append(("stdout", unparse_line_val(line)))
+
+    prefix = (directive_prefix(spec.file_type) + " ").lstrip()
+    lines = [f"{prefix}{name}: {value}\n" for name, value in directives]
+    lines.append(spec.body)
+
     return lines
 
 
+def read_spec(path: Path) -> Spec:
+    lines = path.read_text().splitlines(keepends=True)
+    return parse_spec(path, lines)
+
+
 def update_spec(
-    path: Path, spec: spec, result: subprocess.CompletedProcess[str]
+    path: Path, spec: Spec, result: subprocess.CompletedProcess[str]
 ) -> None:
-    lines: list[str] = []
-    if spec.description is not None:
-        lines.append(f"//# description: {spec.description}\n")
-    if spec.mode is not None:
-        lines.append(f"//# mode: {spec.mode}\n")
-    if spec.args is not None:
-        lines.append(f"//# args: {spec.args}\n")
-    lines.append(f"//# exit: {result.returncode}\n")
-    lines.extend(format_output("//# stderr: ", result.stderr))
+    if spec.exit_code is not None:
+        spec.exit_code = result.returncode
+    if spec.stderr is not None:
+        spec.stderr = result.stderr
     if spec.stdout is not None:
-        lines.extend(format_output("//# stdout: ", result.stdout))
-    lines.append(spec.body)
-    path.write_text("".join(lines))
+        spec.stdout = result.stdout
+    path.write_text("".join(unparse_spec(spec)))
+
+
+################################################################################
+# Test runner
 
 
 def print_text_block(label: str, text: str) -> None:
@@ -154,15 +213,15 @@ def print_text_block(label: str, text: str) -> None:
 
 
 def print_text_diff(expected: str, actual: str, label: str) -> None:
-    expected_lines = expected.splitlines(keepends=True)
-    actual_lines = actual.splitlines(keepends=True)
+    expected_lines = expected.splitlines()
+    actual_lines = actual.splitlines()
     diff = unified_diff(
         expected_lines,
         actual_lines,
         fromfile=f"expected {label}",
         tofile=f"actual {label}",
     )
-    print("".join(diff) or "<no difference>")
+    print("\n".join(diff) or "<no difference>")
 
 
 def default_exit_for(path: Path) -> int:
@@ -223,34 +282,35 @@ def run(args: list[str], check: bool = False) -> subprocess.CompletedProcess[str
     return asyncio.run(run_async(args, check=check))
 
 
-def run_command(
-    path: Path, mode: str, args: list[str]
+def run_file(
+    path: Path, mode: SpecMode, args: list[str]
 ) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory(
         prefix="smolcc-test-", dir=os.environ.get("TMPDIR") or None
     ) as temp_dir:
         match mode:
-            case "compile-only":
+            case SpecMode.COMPILE_ONLY:
                 output_path = Path(temp_dir) / "a.o"
                 return run([CC, *CFLAGS, "-c", "-o", str(output_path), str(path)])
-            case "run":
+            case SpecMode.RUN:
                 output_path = Path(temp_dir) / "a.out"
                 compile_result = run([CC, *CFLAGS, "-o", str(output_path), str(path)])
                 if compile_result.returncode != 0:
                     return compile_result
                 return run([str(output_path), *args])
-            case _:
-                raise ValueError(f"unsupported mode: {mode}")
 
 
 def collect_case_groups(paths: list[Path]) -> list[list[Path]]:
     if paths:
         return [paths]
-    all_paths = sorted(Path("tests").rglob("*.c"))
-    return [
-        [path for path in all_paths if "bad" not in path.parts],
-        [path for path in all_paths if "bad" in path.parts],
-    ]
+
+    def walk():
+        for dirpath, _, filenames in os.walk("tests"):
+            for filename in filenames:
+                if filename.endswith((".snap.txt", ".c")):
+                    yield Path(dirpath) / filename
+
+    return [sorted(walk())]
 
 
 def run_case(path: Path, update: bool) -> bool:
@@ -259,9 +319,10 @@ def run_case(path: Path, update: bool) -> bool:
         print()
 
     spec = read_spec(path)
-    mode = spec.mode or "compile-only"
+    mode = spec.mode or SpecMode.COMPILE_ONLY
     args = shlex.split(spec.args) if spec.args else []
-    result = run_command(path, mode, args)
+    src_path = spec.file or path
+    result = run_file(src_path, mode, args)
 
     if update:
         update_spec(path, spec, result)
@@ -277,7 +338,11 @@ def run_case(path: Path, update: bool) -> bool:
     stderr_failure, stdout_failure = None, None
     if spec.stderr is not None and actual_stderr != spec.stderr:
         stderr_failure = (spec.stderr, actual_stderr)
-    if mode == "run" and spec.stdout is not None and actual_stdout != spec.stdout:
+    if (
+        mode == SpecMode.RUN
+        and spec.stdout is not None
+        and actual_stdout != spec.stdout
+    ):
         stdout_failure = (spec.stdout, actual_stdout)
 
     if result.returncode != want_exit or stderr_failure or stdout_failure:
@@ -301,14 +366,17 @@ def run_case(path: Path, update: bool) -> bool:
     return True
 
 
-def run_group(paths: list[Path], update: bool) -> int:
-    failures = 0
+def run_group(paths: list[Path], update: bool):
+    n_passed, n_failed, n_skipped = 0, 0, 0
     for path in paths:
         if not path.exists():
             print(f"{YELLOW}SKIP{RESET} {path} (file not found)")
-        elif not run_case(path, update):
-            failures += 1
-    return failures
+            n_skipped += 1
+        elif run_case(path, update):
+            n_passed += 1
+        else:
+            n_failed += 1
+    return n_passed, n_failed, n_skipped
 
 
 def parse_args() -> argparse.Namespace:
@@ -359,34 +427,36 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_smolcc(args: argparse.Namespace):
-    if not args.no_build:
-        run(["make", "compiler", f"STAGE={args.stage}"], check=True)
+    run(["make", "compiler", f"STAGE={args.stage}"], check=True)
 
 
 def main() -> int:
     args = parse_args()
 
-    build_smolcc(args)
+    if not args.no_build:
+        build_smolcc(args)
 
-    print("\n===> Running tests...\n")
+    print("\n===> Running snapshot tests...\n")
 
     groups = collect_case_groups(args.paths)
     if not groups or not any(groups):
         print("No test cases found.")
         return 0
 
-    failures = sum(run_group(group, args.update) for group in groups)
+    n_passed, n_failed, n_skipped = 0, 0, 0
+    for group in groups:
+        passed, failed, skipped = run_group(group, args.update)
+        n_passed += passed
+        n_failed += failed
+        n_skipped += skipped
 
     if args.update:
         print("\nExpectations updated.")
         return 0
 
-    if failures == 0:
-        print("\nAll tests passed!")
-        return 0
-
-    print(f"\n{failures} test(s) failed!")
-    return 1
+    status = f"{GREEN}PASS{RESET}" if n_failed == 0 else f"{RED}FAIL{RESET}"
+    print(f"\n{status}: {n_passed} passed, {n_failed} failed, {n_skipped} skipped.")
+    return int(bool(n_failed))
 
 
 if __name__ == "__main__":

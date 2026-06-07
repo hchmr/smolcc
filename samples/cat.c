@@ -1,17 +1,13 @@
-//# description: Concatenates two stable fixture files, including one without a final newline.
-//# mode: run
-//# exit: 0
-//# args: tests/data/text_short_first.txt tests/data/text_short_last_noeol.txt
-//# stdout: x
-//# stdout: alpha beta gamma
-//# stdout: 0123456789012345678901234567890123456789many many words here
-//# stdout: mid size
-//# stdout: z
+//= A simple implementation of the Unix `cat` command.
 
 //------------------------------------------------------------------------------
+//- deps
+
+// stdio
 
 enum { EOF = -1 };
 extern struct file *stdin, *stdout, *stderr;
+
 extern struct file *fopen(const char *filename, const char *mode);
 extern int fclose(struct file *stream);
 extern int ferror(struct file *stream);
@@ -19,9 +15,12 @@ extern long fread(void *ptr, unsigned long size, unsigned long count, struct fil
 extern long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 extern int fprintf(struct file *stream, const char *format, ...);
 
+// errno
+
 extern void perror(const char *msg);
 
 //------------------------------------------------------------------------------
+//- impl
 
 enum { BUF_SIZE = 1024 };
 
