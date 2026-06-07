@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 
 int value = -2147483647 - 1;
 

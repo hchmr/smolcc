@@ -1,6 +1,6 @@
+//# description: array parameters are adjusted to pointers, so indexing still works through the parameter.
 //# mode: run
 //# exit: 6
-//# desription: array parameters are adjusted to pointers, so indexing still works through the parameter.
 
 int pick_last(int xs[3]) {
     return xs[2];

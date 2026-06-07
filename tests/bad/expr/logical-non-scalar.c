@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/expr/logical-non-scalar.c:9:12: error: operands must be scalar
+//# stderr: tests/bad/expr/logical-non-scalar.c:8:12: error: operands must be scalar
 struct Pair {
     int value;
 };

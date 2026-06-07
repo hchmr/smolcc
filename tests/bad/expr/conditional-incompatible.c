@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/expr/conditional-incompatible.c:6:16: error: incompatible pointer operands
+//# stderr: tests/bad/expr/conditional-incompatible.c:5:16: error: incompatible pointer operands
 int main() {
     int *lhs;
     char *rhs;

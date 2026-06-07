@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 //# stdout: ABC
 
 extern int putchar(int c);

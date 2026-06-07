@@ -3,7 +3,6 @@
 //# stdout: 2147483648
 //# stdout: 9223372036854775807
 //# stdout: 9223372036854775808
-//# exit: 0
 
 extern int printf(const char *fmt, ...);
 

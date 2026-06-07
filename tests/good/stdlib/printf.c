@@ -1,13 +1,12 @@
 //# mode: run
-//# exit: 0
 //# stdout: --- Basics & argument order ---
 //# stdout: Literal string with no args
 //# stdout: Escape chars: \n=
-//# stdout: , \t=	, percent=%
+//# stdout: ", \\t=\t, percent=%"
 //# stdout: Two integers: x=420 y=71234
 //# stdout: Mixed types: hello 123 A
 //# stdout: Null string: |(null)|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Decimal edge cases ---
 //# stdout: Zero:         |0|
 //# stdout: One:          |1|
@@ -15,15 +14,15 @@
 //# stdout: Max int (32): |2147483647|
 //# stdout: Min int (32): |-2147483648|
 //# stdout: %i specifier: |123|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Unsigned decimal ---
 //# stdout: Unsigned int max:  |4294967295|
 //# stdout: Unsigned long max: |18446744073709551615|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Long decimal ---
 //# stdout: Long decimal min: |-9223372036854775808|
 //# stdout: Long decimal max: |9223372036854775807|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Hex & octal ---
 //# stdout: Hex zero:     |0|
 //# stdout: Hex upper:    |abcdef|
@@ -39,7 +38,7 @@
 //# stdout: Long max hex: |7fffffffffffffff|
 //# stdout: Long min oct: |1000000000000000000000|
 //# stdout: Long max oct: |777777777777777777777|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Sign Flags ('+' and ' ') ---
 //# stdout: ' ' pos:  | 123|
 //# stdout: ' ' neg:  |-123|
@@ -47,7 +46,7 @@
 //# stdout: '+' neg:  |-123|
 //# stdout: '+' zero: |+0|
 //# stdout: ' ' zero: | 0|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Width, padding & alignment ---
 //# stdout: Right padding:      |       123|
 //# stdout: Left padding (-):   |123       |
@@ -58,7 +57,7 @@
 //# stdout: Left adj + '+':     |+123      |
 //# stdout: Left adj + ' ':     | 123      |
 //# stdout: Left adj + '0 ':    | 123      |
-//# stdout:
+//# stdout: ""
 //# stdout: --- Alternate form flags (#) ---
 //# stdout: Alt hex zero: |0|
 //# stdout: Alt hex pos:  |0xff|
@@ -66,25 +65,25 @@
 //# stdout: Alt hex neg:  |0xffffffff|
 //# stdout: Alt oct zero: |0|
 //# stdout: Alt oct pos:  |010|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Strings and characters ---
 //# stdout: Normal str:   |test|
 //# stdout: Width str:    |      test|
 //# stdout: Left adj str: |test      |
 //# stdout: Char normal:  |X|
 //# stdout: Char width:   |    X|
-//# stdout:
+//# stdout: ""
 //# stdout: --- pointer printing ---
 //# stdout: High ptr: |0xc5f467a193b28ed|
 //# stdout: Low ptr:  |0xfe63|
 //# stdout: Null ptr: |(nil)|
-//# stdout:
+//# stdout: ""
 //# stdout: --- Literal percent sign (%) ---
 //# stdout: Percent: |%|
 //# stdout: Multiple: |%%%|
 //# stdout: Confusing: |%%s%s%|
 //# stdout: Width + percent: |%|
-//# stdout:
+//# stdout: ""
 //# stdout: --- %n specifier ---
 //# stdout: Hello World!
 //# stdout: 5=5 11=11

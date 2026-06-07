@@ -7,3 +7,4 @@ stdout:        0       0       0       0 tests/data/empty.txt
 stdout:        2       5      59      40 tests/data/text_short_first.txt
 stdout:        2       7      31      20 tests/data/text_short_last_noeol.txt
 stdout:        9      20     186      47 total
+

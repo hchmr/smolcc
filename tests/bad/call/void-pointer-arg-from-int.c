@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/call/void-pointer-arg-from-int.c:7:17: error: target type mismatch
+//# stderr: tests/bad/call/void-pointer-arg-from-int.c:6:17: error: target type mismatch
 
 int sink(void *p);
 

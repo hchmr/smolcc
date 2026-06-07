@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 //# stdout: x=420 y=71234
 
 extern int printf(const char *format, ...);

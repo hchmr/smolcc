@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 //# stdout: 4294967295
 //# stdout: 1
 //# stdout: -1

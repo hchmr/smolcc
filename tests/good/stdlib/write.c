@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 //# stdout: ok
 
 extern long write(int fd, const void *buf, unsigned long count);

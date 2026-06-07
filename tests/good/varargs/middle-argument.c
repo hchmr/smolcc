@@ -1,6 +1,6 @@
+//# description: variadic integer arguments are read as int and the middle one is kept in a char local.
 //# mode: run
 //# exit: 2
-//# desription: variadic integer arguments are read as int and the middle one is kept in a char local.
 
 #include <stdarg.h>
 

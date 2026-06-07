@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 
 void *ptr = 0;
 

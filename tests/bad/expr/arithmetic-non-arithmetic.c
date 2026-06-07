@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/expr/arithmetic-non-arithmetic.c:9:12: error: operands must be arithmetic
+//# stderr: tests/bad/expr/arithmetic-non-arithmetic.c:8:12: error: operands must be arithmetic
 struct Pair {
     int value;
 };

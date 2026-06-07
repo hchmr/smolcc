@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/structs/member-on-incomplete.c:7:12: error: member access on incomplete struct
+//# stderr: tests/bad/structs/member-on-incomplete.c:6:12: error: member access on incomplete struct
 struct Pair;
 
 int main() {

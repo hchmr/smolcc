@@ -129,7 +129,10 @@ def parse_spec(path: Path, lines: list[str]) -> Spec:
             case ("stdout", value):
                 stdout_parts.append(parse_line_val(path, lineno, "stdout", value))
             case (other, _):
-                print(f"{path}:{lineno}: warning: invalid directive {other!r} (ignored)", file=sys.stderr)
+                print(
+                    f"{path}:{lineno}: warning: invalid directive {other!r} (ignored)",
+                    file=sys.stderr,
+                )
             case _:
                 body_parts.append(raw_line)
 
@@ -150,7 +153,11 @@ def parse_spec(path: Path, lines: list[str]) -> Spec:
 
 
 def unparse_line_val(line: str) -> str:
-    if line.startswith('"') or any(not (32 <= ord(c) <= 126) for c in line):
+    if (
+        line.startswith('"')
+        or all(c.isspace() for c in line)
+        or any(not (32 <= ord(c) <= 126) for c in line)
+    ):
         return json.dumps(line)
     else:
         return line
@@ -193,6 +200,8 @@ def update_spec(
 ) -> None:
     if spec.exit_code is not None:
         spec.exit_code = result.returncode
+    if spec.exit_code == default_exit_for(path):
+        spec.exit_code = None
     if spec.stderr is not None:
         spec.stderr = result.stderr
     if spec.stdout is not None:

@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/expr/cast-non-scalar.c:9:12: error: cast requires scalar
+//# stderr: tests/bad/expr/cast-non-scalar.c:8:12: error: cast requires scalar
 struct Pair {
     int value;
 };

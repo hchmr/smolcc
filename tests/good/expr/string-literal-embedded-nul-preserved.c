@@ -1,6 +1,5 @@
-//# mode: run
-//# exit: 0
 //# description: Verify that string literals with embedded NUL characters are fully preserved and not truncated at the first NUL
+//# mode: run
 
 int main() {
     char *lhs = "a\0b";

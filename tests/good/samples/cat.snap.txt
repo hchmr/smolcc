@@ -1,12 +1,12 @@
-mode: run
 file: samples/cat.c
-exit: 0
+mode: run
 args: tests/data/blank_lines.txt tests/data/empty.txt tests/data/text_short_first.txt tests/data/text_short_last_noeol.txt
-stdout:
+stdout: ""
 stdout: two
-stdout:
+stdout: ""
 stdout: three fourx
 stdout: alpha beta gamma
 stdout: 0123456789012345678901234567890123456789many many words here
 stdout: mid size
 stdout: z
+

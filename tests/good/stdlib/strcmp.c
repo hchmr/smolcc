@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 
 extern int strcmp(const char *lhs, const char *rhs);
 

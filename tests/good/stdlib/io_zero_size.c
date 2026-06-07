@@ -1,6 +1,5 @@
 //# description: Verifies zero-byte fread/fwrite return immediately without triggering division by zero or similar errors.
 //# mode: run
-//# exit: 0
 
 struct file;
 

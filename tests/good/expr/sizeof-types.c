@@ -1,5 +1,4 @@
 //# mode: run
-//# exit: 0
 
 int main() {
     return (sizeof(char) == 1 &&

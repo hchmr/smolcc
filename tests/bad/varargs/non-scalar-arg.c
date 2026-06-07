@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/varargs/non-scalar-arg.c:13:20: error: variadic arguments must be scalar
+//# stderr: tests/bad/varargs/non-scalar-arg.c:12:20: error: variadic arguments must be scalar
 #include <stdarg.h>
 
 int sink(int first, ...);

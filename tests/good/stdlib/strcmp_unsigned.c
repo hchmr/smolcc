@@ -1,6 +1,5 @@
 //# description: Verifies strcmp/strncmp compare bytes as unsigned char values.
 //# mode: run
-//# exit: 0
 
 extern unsigned long strcmp(const char *lhs, const char *rhs);
 extern unsigned long strncmp(const char *lhs, const char *rhs, unsigned long n);

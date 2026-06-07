@@ -1,6 +1,5 @@
 //# mode: compile-only
-//# exit: 1
-//# stderr: tests/bad/expr/int-to-typed-pointer.c:7:9: error: target type mismatch
+//# stderr: tests/bad/expr/int-to-typed-pointer.c:6:9: error: target type mismatch
 
 int main() {
     int *p;

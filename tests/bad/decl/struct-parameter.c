@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/decl/struct-parameter.c:8:27: error: bad parameter type
+//# stderr: tests/bad/decl/struct-parameter.c:7:27: error: bad parameter type
 
 struct Pair {
     int left;

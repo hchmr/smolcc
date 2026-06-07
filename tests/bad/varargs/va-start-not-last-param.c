@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/varargs/va-start-not-last-param.c:7:20: error: va_start second operand must be parameter name
+//# stderr: tests/bad/varargs/va-start-not-last-param.c:6:20: error: va_start second operand must be parameter name
 #include <stdarg.h>
 
 int begin(int first, int second, ...) {

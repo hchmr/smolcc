@@ -1,5 +1,4 @@
-//# exit: 1
-//# stderr: tests/bad/varargs/va-start-non-valist.c:7:5: error: va_start operand must be va_list
+//# stderr: tests/bad/varargs/va-start-non-valist.c:6:5: error: va_start operand must be va_list
 #include <stdarg.h>
 
 int begin(int first, ...) {
