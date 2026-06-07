@@ -73,8 +73,7 @@ def directive_prefix(file_type: str) -> str:
 
 def parse_directive(file_type: str, line: str) -> tuple[str, str] | None:
     prefix_pat = directive_prefix(file_type)
-    name_pat = "|".join(DIRECTIVE_NAMES)
-    directive_pat = rf"{prefix_pat}\s*({name_pat})\s*:\s?(.*)"
+    directive_pat = rf"{prefix_pat}\s*(\w+)\s*:\s?(.*)"
 
     if not (match := re.fullmatch(directive_pat, line)):
         return None
@@ -129,6 +128,8 @@ def parse_spec(path: Path, lines: list[str]) -> Spec:
                 stderr_parts.append(parse_line_val(path, lineno, "stderr", value))
             case ("stdout", value):
                 stdout_parts.append(parse_line_val(path, lineno, "stdout", value))
+            case (other, _):
+                print(f"{path}:{lineno}: warning: invalid directive {other!r} (ignored)", file=sys.stderr)
             case _:
                 body_parts.append(raw_line)
 

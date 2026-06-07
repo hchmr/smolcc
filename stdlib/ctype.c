@@ -2,7 +2,7 @@ int iscntrl(int c) {
     return (c >= 0 && c <= 31) || c == 127;
 }
 int isprint(int c) {
-    return !iscntrl(c);
+    return c >= 32 && c < 127;
 }
 int isgraph(int c) {
     return c > 32 && c < 127;

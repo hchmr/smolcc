@@ -1,0 +1,6 @@
+file: samples/hexdump.c
+mode: run
+args: -Cn 24 build/dist/libexec/smolcc/smolcc1
+stdout: 00000000  7f 45 4c 46 02 01 01 00  00 00 00 00 00 00 00 00  |.ELF............|
+stdout: 00000010  03 00 b7 00 01 00 00 00                           |........|
+stdout: 00000018

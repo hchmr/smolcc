@@ -4,6 +4,7 @@
     .globl  _start
 _start:
     bl      _init_stdio
+    bl      _init_getopt
 
     // main(argc, argv);
     ldr     x0, [sp]                    // argc

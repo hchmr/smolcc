@@ -17,6 +17,7 @@ extern int fprintf(struct file *stream, const char *format, ...);
 
 // errno
 
+extern int errno;
 extern void perror(const char *msg);
 
 //------------------------------------------------------------------------------
@@ -29,7 +30,9 @@ static char rdbuf[BUF_SIZE];
 static char *progname;
 
 static void file_error(const char *filename) {
+    int errsv = errno;
     fprintf(stderr, "%s: ", progname);
+    errno = errsv;
     perror(filename);
 }
 

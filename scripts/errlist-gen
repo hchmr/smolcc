@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+
+set -e
+
+raw_tab=$(errno -l | sort -k 2,2n)
+
+echo '    .section .rodata'
+
+echo "$raw_tab" | cut -d ' ' -f 1,2,3- | while IFS=' ' read -r name num dscr; do
+    echo ".str.${name}.dscr: .asciz \"${dscr}\""
+    echo ".str.${name}.name: .asciz \"${name}\""
+done
+
+echo "$raw_tab" | cut -d ' ' -f 1,2 | while IFS=' ' read -r name num; do
+    echo "    .balign 8"
+    echo ".tab.${name}:"
+    echo "    .quad .str.${name}.dscr"
+    echo "    .quad .str.${name}.name"
+    echo "    .word ${num}"
+done
+
+echo "    .balign 8"
+echo "    .globl _errlist"
+echo "_errlist:"
+echo "$raw_tab" | head -n 1 | cut -d ' ' -f 1 | while read -r name; do
+    echo "    .quad .tab.${name}"
+done
+
+echo "    .balign 4"
+echo "    .globl _errlist_len"
+echo "_errlist_len:"
+echo "    .word $(echo "$raw_tab" | wc -l)"

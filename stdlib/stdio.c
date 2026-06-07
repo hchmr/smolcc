@@ -23,6 +23,11 @@ extern int strcmp(const char *s1, const char *s2);
 extern unsigned long strlen(const char *s);
 extern void *memset(void *s, int c, unsigned long n);
 
+enum {
+    EINVAL = 22,
+};
+extern int errno;
+
 //==============================================================================
 //= impl
 
@@ -121,16 +126,17 @@ static long ffill(struct file *stream) {
 
 struct file *fopen(const char *fname, const char *mode) {
     int open_flags = 0, flags = 0;
-    if (!strcmp(mode, "r")) {
+    if (!strcmp(mode, "r") || !strcmp(mode, "rb")) {
         open_flags = O_RDONLY;
         flags = FFLG_R;
-    } else if (!strcmp(mode, "w")) {
+    } else if (!strcmp(mode, "w") || !strcmp(mode, "wb")) {
         open_flags = O_WRONLY | O_CREAT | O_TRUNC;
         flags = FFLG_W;
-    } else if (!strcmp(mode, "a")) {
+    } else if (!strcmp(mode, "a") || !strcmp(mode, "ab")) {
         open_flags = O_WRONLY | O_CREAT | O_APPEND;
         flags = FFLG_W;
     } else {
+        errno = EINVAL;
         return 0;
     }
 

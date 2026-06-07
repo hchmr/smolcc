@@ -14,9 +14,14 @@ BUILD_DIR ?= build
 OUT_DIR = $(BUILD_DIR)/stdlib
 OBJ_DIR = $(OUT_DIR)/obj
 
+ERRLIST_GEN = scripts/errlist-gen
+ERRLIST_ASM = $(OBJ_DIR)/errlist.s
+ERRLIST = $(OBJ_DIR)/errlist.o
+
 CRT_OBJS = $(CRT_ASMS:$(SRC_DIR)/%.s=$(OBJ_DIR)/%.o)
 LIBC_OBJS = $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o) \
-			$(LIBC_ASMS:$(SRC_DIR)/%.s=$(OBJ_DIR)/%.o)
+			$(LIBC_ASMS:$(SRC_DIR)/%.s=$(OBJ_DIR)/%.o) \
+			$(ERRLIST)
 
 LIBC = $(OUT_DIR)/libc.a
 CRT = $(OUT_DIR)/crt.o
@@ -42,6 +47,9 @@ $(OUT_DIR):
 
 $(OBJ_DIR): | $(OUT_DIR)
 	mkdir -p $@
+
+$(ERRLIST_ASM): $(ERRLIST_GEN)
+	$(ERRLIST_GEN) > $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 	$(SMOLCC) -v -nostdlib -c -o $@ $<

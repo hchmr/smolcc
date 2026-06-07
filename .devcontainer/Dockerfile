@@ -25,6 +25,7 @@ RUN apt-get update \
         man-db \
         manpages-dev \
         manpages-posix-dev \
+        moreutils \
         python3 \
         python3-pip \
         ripgrep \
