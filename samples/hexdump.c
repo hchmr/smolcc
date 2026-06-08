@@ -32,6 +32,7 @@ extern void perror(const char *s);
 // string
 
 extern const char *strchr(const char *s, int c);
+extern void *memset(void *s, long c, unsigned long n);
 
 // unistd
 
@@ -42,26 +43,20 @@ int getopt(int argc, char **argv, const char *optstring);
 //------------------------------------------------------------------------------
 //- impl
 
-enum { MAX_FILES = 64 };
-
-// file iter
-int nfiles;
-const char *files[MAX_FILES];
-int fileno;
-const char *filename;
-struct file *file;
+enum { CHUNK_SIZE = 16 };
 
 // args
 const char *progname;
-int canonical = 0;
-unsigned long limit = ~0UL;
-
-// chunk
-enum { CHUNK_SIZE = 16 };
-unsigned char buf[CHUNK_SIZE + 1];
 
 // error count
 int nerr;
+
+struct conf {
+    int canonical;
+    unsigned long limit;
+    int nfiles;
+    const char **filenames;
+};
 
 void report_err(const char *filename) {
     nerr++;
@@ -69,38 +64,79 @@ void report_err(const char *filename) {
     perror("");
 }
 
-void next_file() {
-    if (file) {
-        if (fclose(file) != 0) {
-            report_err(filename);
-        }
-        file = 0;
-    }
-    while (1) {
-        if (fileno == nfiles)
-            break;
-        filename = files[fileno++];
-        file = fopen(filename, "rb");
-        if (file)
-            break;
-        report_err(filename);
+//------------------------------------------------------------------------------
+//- file sequence handling
+
+struct file_seq {
+    int nfiles;
+    const char **filenames;
+
+    int fileno;
+    struct file *file;
+};
+
+void file_seq_init(struct file_seq *self, const char **filenames, int nfiles) {
+    memset(self, 0, sizeof(struct file_seq));
+    self->filenames = filenames;
+    self->nfiles = nfiles;
+    if (nfiles == 0) {
+        self->file = stdin;
     }
 }
 
-int next_chunk(unsigned long offset) {
-    int want = CHUNK_SIZE;
+const char *curr_filename(struct file_seq *self) {
+    if (self->nfiles == 0)
+        return "stdin";
+    return self->filenames[self->fileno];
+}
+
+int open_next(struct file_seq *self) {
+    while (self->fileno < self->nfiles) {
+        const char *filename = self->filenames[self->fileno];
+        self->file = fopen(filename, "rb");
+        if (self->file)
+            break;
+        report_err(filename);
+        self->fileno++;
+    }
+
+    return self->file != 0;
+}
+
+int next_file(struct file_seq *self) {
+    if (self->nfiles == 0)
+        return 0;
+    if (self->file) {
+        if (fclose(self->file) != 0) {
+            report_err(curr_filename(self));
+        }
+        self->file = 0;
+        self->fileno++;
+    }
+    return open_next(self);
+}
+
+int read_chunk(struct file_seq *self, unsigned long offset, unsigned long limit, unsigned char *buf,
+               unsigned long bufsize) {
+    int want = bufsize;
     if (offset + want > limit) {
         want = (int)(limit - offset);
     }
 
+    if (!self->file) {
+        if (!open_next(self))
+            return 0;
+    }
+
     int pos = 0;
-    while (file && want) {
-        int n = (int)fread(buf + pos, 1, want, file);
+    while (self->file && want) {
+        int n = (int)fread(buf + pos, 1, want, self->file);
         if (n < want) {
-            if (ferror(file)) {
-                report_err(filename);
+            if (ferror(self->file)) {
+                report_err(curr_filename(self));
             }
-            next_file();
+            if (!next_file(self))
+                break;
         }
         want = want - n;
         pos = pos + n;
@@ -108,7 +144,10 @@ int next_chunk(unsigned long offset) {
     return pos;
 }
 
-int format_chunk(unsigned long offset, int n) {
+//------------------------------------------------------------------------------
+//- hexdump
+
+int format_chunk(struct conf *conf, unsigned long offset, unsigned char *buf, int n) {
     printf("%08lx ", offset);
 
     for (int i = 0; i < CHUNK_SIZE; i++) {
@@ -120,35 +159,28 @@ int format_chunk(unsigned long offset, int n) {
             printf("   ");
     }
 
-    if (canonical) {
+    if (conf->canonical) {
         for (int i = 0; i < n; i++) {
             if (!isprint(buf[i])) {
                 buf[i] = '.';
             }
         }
-        buf[n] = '\0';
-        printf("  |%s|", buf);
+        printf("  |%.*s|", n, buf);
     }
 
     printf("\n");
+    return n;
 }
 
-void hexdump() {
-    if (nfiles == 0) {
-        filename = "stdin";
-        file = stdin;
-    } else {
-        next_file();
-    }
-
+void hexdump(struct conf *conf, struct file_seq *seq) {
+    unsigned char buf[CHUNK_SIZE];
     unsigned long offset = 0;
 
-    while (offset < limit) {
-        int n = next_chunk(offset);
-        if (n == 0) {
+    while (offset < conf->limit) {
+        int n = read_chunk(seq, offset, conf->limit, buf, CHUNK_SIZE);
+        if (n == 0)
             break;
-        }
-        format_chunk(offset, n);
+        format_chunk(conf, offset, buf, n);
         offset = offset + n;
     }
 
@@ -167,8 +199,11 @@ void arg_error() {
     exit(1);
 }
 
-void argparse(int argc, char **argv) {
+void argparse(int argc, char **argv, struct conf *conf) {
     progname = argv[0];
+
+    int canonical = 0;
+    unsigned long limit = ~0UL;
 
     int opt;
     while ((opt = getopt(argc, argv, "Cn:")) != -1) {
@@ -187,22 +222,23 @@ void argparse(int argc, char **argv) {
         }
     }
 
-    for (int i = optind; i < argc; i++) {
-        if (nfiles == MAX_FILES) {
-            fprintf(stderr, "%s: too many files\n", progname);
-            arg_error();
-        }
-        files[nfiles++] = argv[i];
-    }
+    conf->limit = limit;
+    conf->canonical = canonical;
+    conf->nfiles = argc - optind;
+    conf->filenames = (const char**)argv + optind;
 }
 
 //------------------------------------------------------------------------------
 //- main
 
 int main(int argc, char **argv) {
-    argparse(argc, argv);
+    struct conf conf;
+    argparse(argc, argv, &conf);
 
-    hexdump();
+    struct file_seq seq;
+    file_seq_init(&seq, conf.filenames, conf.nfiles);
+
+    hexdump(&conf, &seq);
 
     return !!nerr;
 }

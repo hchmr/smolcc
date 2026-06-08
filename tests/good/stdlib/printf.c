@@ -73,6 +73,12 @@
 //# stdout: Char normal:  |X|
 //# stdout: Char width:   |    X|
 //# stdout: ""
+//# stdout: --- Strings with precision & null pointers ---
+//# stdout: Dynamic precision:      |hello|
+//# stdout: Static precision:       |hello|
+//# stdout: Static zero precision:  ||
+//# stdout: Dynamic zero precision: ||
+//# stdout: ""
 //# stdout: --- pointer printing ---
 //# stdout: High ptr: |0xc5f467a193b28ed|
 //# stdout: Low ptr:  |0xfe63|
@@ -181,6 +187,13 @@ int main() {
     printf("Left adj str: |%-10s|\n", "test");
     printf("Char normal:  |%c|\n", 'X');
     printf("Char width:   |%5c|\n", 'X');
+
+    //= STRINGS WITH PRECISION & NULL POINTERS (%.*s)
+    printf("\n--- Strings with precision & null pointers ---\n");
+    printf("Dynamic precision:      |%.*s|\n", 5, "hello world");
+    printf("Static precision:       |%.5s|\n", "hello world");
+    printf("Static zero precision:  |%.0s|\n", "hello world");
+    printf("Dynamic zero precision: |%.*s|\n", 0, "hello world");
 
     //= %p SPECIFIER
 

@@ -1,6 +1,13 @@
-long strlen(const char *s) {
-    long n = 0;
+unsigned long strlen(const char *s) {
+    unsigned long n = 0;
     while (*s++)
+        n++;
+    return n;
+}
+
+unsigned long strnlen(const char *s, unsigned long maxlen) {
+    unsigned long n = 0;
+    while (n < maxlen && *s++)
         n++;
     return n;
 }
@@ -17,8 +24,8 @@ int strcmp(const char *s1, const char *s2) {
     }
 }
 
-int strncmp(const char *s1, const char *s2, int n) {
-    for (int i = 0; i < n; i++) {
+int strncmp(const char *s1, const char *s2, unsigned long n) {
+    for (unsigned long i = 0; i < n; i++) {
         int c1 = *s1 & 255;
         int c2 = *s2 & 255;
         if (c1 != c2)

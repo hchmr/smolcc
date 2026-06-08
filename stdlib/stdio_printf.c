@@ -9,6 +9,7 @@ extern int fputc(int c, struct file *stream);
 extern unsigned long fwrite(const void *ptr, unsigned long size, unsigned long count, struct file *stream);
 
 extern unsigned long strlen(const char *s);
+extern unsigned long strnlen(const char *s, unsigned long maxlen);
 extern const char *strchr(const char *s, int c);
 extern void *memset(void *s, long c, unsigned long n);
 
@@ -105,9 +106,9 @@ enum {
     FMT_ULONG,
     FMT_STR,
     FMT_CHR,
-    FMT_LIT,
     FMT_PTR,
     FMT_N,
+    FMT_RAW,
 };
 
 enum {
@@ -119,21 +120,28 @@ enum {
     FMT_FLAGS_PAD_RIGHT = 32,
 };
 
+enum { NO_PRECISION = -1 };
+
 struct fmt_spec {
     int type;
     int flags;
     int base;
     unsigned int min_width;
+    int precision;
 
-    // for FMT_LIT
-    const char *lit;
-    unsigned int lit_len;
+    // for FMT_RAW
+    struct {
+        const char *str;
+        unsigned int len;
+    } raw;
 };
 
-static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
+static const char *p_fmt(const char *fmt, va_list *ap, struct fmt_spec *spec) {
     if (!*fmt)
         return 0;
     memset(spec, 0, sizeof(struct fmt_spec));
+    spec->precision = NO_PRECISION;
+
     if (*fmt == '%') {
         fmt++;
         // flags
@@ -155,6 +163,21 @@ static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
         }
         if (isdigit(*fmt)) {
             fmt = sscan_int(fmt, &spec->min_width);
+        }
+
+        if (*fmt == '.') {
+            fmt++;
+            if (*fmt == '*') {
+                spec->precision = va_arg(*ap, int);
+                if (spec->precision < 0) {
+                    spec->precision = NO_PRECISION;
+                }
+                fmt++;
+            } else if (isdigit(*fmt)) {
+                fmt = sscan_int(fmt, (unsigned int *)&spec->precision);
+            } else {
+                spec->precision = 0;
+            }
         }
 
         int int_fmt = FMT_INT;
@@ -187,9 +210,9 @@ static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
         } else if (*fmt == 'n') {
             spec->type = FMT_N;
         } else if (*fmt == '%') {
-            spec->type = FMT_LIT;
-            spec->lit = fmt;
-            spec->lit_len = 1;
+            spec->type = FMT_RAW;
+            spec->raw.str = fmt;
+            spec->raw.len = 1;
         } else {
             // undefined behavior
         }
@@ -198,9 +221,9 @@ static const char *p_fmt(const char *fmt, struct fmt_spec *spec) {
         unsigned int len = 0;
         for (len = 0; fmt[len] && fmt[len] != '%'; len++)
             ;
-        spec->type = FMT_LIT;
-        spec->lit = fmt;
-        spec->lit_len = len;
+        spec->type = FMT_RAW;
+        spec->raw.str = fmt;
+        spec->raw.len = len;
         fmt = fmt + len;
     }
 
@@ -213,6 +236,54 @@ static int fill(struct file *stream, char c, int count) {
             return -1;
     }
     return count;
+}
+
+static int fmt_str_core(struct file *stream, struct fmt_spec *spec, const char *str, unsigned int len) {
+    int pad_width = spec->min_width > len ? spec->min_width - len : 0;
+    int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;
+
+    if (!pad_right) {
+        if (fill(stream, ' ', pad_width) == -1)
+            return -1;
+    }
+    if (fwrite(str, 1, len, stream) < len)
+        return -1;
+    if (pad_right) {
+        if (fill(stream, ' ', pad_width) == -1)
+            return -1;
+    }
+
+    return len + pad_width;
+}
+
+static int fmt_num_core(struct file *stream, const char *prefix, unsigned int prefix_len, const char *num_str,
+                        unsigned int num_len, struct fmt_spec *spec) {
+    int width = prefix_len + num_len;
+
+    unsigned int pad_width = spec->min_width > width ? spec->min_width - width : 0;
+    int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;
+    int pad_chr = !pad_right && spec->flags & FMT_FLAGS_ZEROPAD ? '0' : ' ';
+
+    if (!pad_right && pad_chr == ' ') {
+        if (fill(stream, ' ', pad_width) == -1)
+            return -1;
+    }
+    if (prefix_len > 0) {
+        if (fwrite(prefix, 1, prefix_len, stream) < prefix_len)
+            return -1;
+    }
+    if (!pad_right && pad_chr == '0') {
+        if (fill(stream, '0', pad_width) == -1)
+            return -1;
+    }
+    if (fwrite(num_str, 1, num_len, stream) < num_len)
+        return -1;
+    if (pad_right && pad_chr == ' ') {
+        if (fill(stream, ' ', pad_width) == -1)
+            return -1;
+    }
+
+    return width + pad_width;
 }
 
 static int fmt_int(struct file *stream, struct fmt_spec *spec, unsigned long n) {
@@ -259,86 +330,36 @@ static int fmt_int(struct file *stream, struct fmt_spec *spec, unsigned long n) 
     }
     unsigned int num_len = num_str_end - num_str;
 
-    unsigned int width = prefix_len + num_len;
-
-    unsigned int pad_width = spec->min_width > width ? spec->min_width - width : 0;
-    int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;
-    int pad_chr = !pad_right && spec->flags & FMT_FLAGS_ZEROPAD ? '0' : ' ';
-
-    if (!pad_right && pad_chr == ' ') {
-        if (fill(stream, ' ', pad_width) == -1)
-            return -1;
-    }
-    if (prefix_len > 0) {
-        if (fwrite(prefix, 1, prefix_len, stream) < prefix_len)
-            return -1;
-    }
-    if (!pad_right && pad_chr == '0') {
-        if (fill(stream, '0', pad_width) == -1)
-            return -1;
-    }
-    if (fwrite(num_str, 1, num_len, stream) < num_len)
-        return -1;
-    if (pad_right && pad_chr == ' ') {
-        if (fill(stream, ' ', pad_width) == -1)
-            return -1;
-    }
-
-    return width + pad_width;
+    return fmt_num_core(stream, prefix, prefix_len, num_str, num_len, spec);
 }
 
-static int fmt_lit(struct file *stream, const char *s, unsigned long len) {
-    if (fwrite(s, 1, len, stream) < len)
-        return -1;
-    return len;
-}
-
-static int fmt_str(struct file *stream, struct fmt_spec *spec, const char *s) {
-    if (s == 0) {
-        s = "(null)";
-    }
-    unsigned long len = strlen(s);
-
-    int pad_width = spec->min_width > len ? spec->min_width - len : 0;
-    int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;
-
-    if (!pad_right) {
-        if (fill(stream, ' ', pad_width) == -1)
-            return -1;
-    }
-    if (fwrite(s, 1, len, stream) < len)
-        return -1;
-    if (pad_right) {
-        if (fill(stream, ' ', pad_width) == -1)
-            return -1;
+static int fmt_str(struct file *stream, struct fmt_spec *spec, const char *str) {
+    unsigned long len;
+    if (str == 0) {
+        str = "(null)";
+        len = 6;
+    } else if (spec->precision == NO_PRECISION) {
+        len = strlen(str);
+    } else {
+        len = strnlen(str, spec->precision);
     }
 
-    return len + pad_width;
+    return fmt_str_core(stream, spec, str, len);
 }
 
 static int fmt_chr(struct file *stream, struct fmt_spec *spec, char c) {
-    int pad_width = spec->min_width > 1 ? spec->min_width - 1 : 0;
-    int pad_right = spec->flags & FMT_FLAGS_PAD_RIGHT;
-
-    if (!pad_right) {
-        if (fill(stream, ' ', pad_width) == -1)
-            return -1;
-    }
-    if (fputc(c, stream) == EOF)
-        return -1;
-    if (pad_right) {
-        if (fill(stream, ' ', pad_width) == -1)
-            return -1;
-    }
-
-    return 1 + pad_width;
+    return fmt_str_core(stream, spec, &c, 1);
 }
 
-static int fmt_ptr(struct file *stream, void *p) {
-    enum { PTR_SIZE = sizeof(void *), N_DIGITS = PTR_SIZE * 2, PTR_STR_LEN = 2 + N_DIGITS };
+static int fmt_ptr(struct file *stream, struct fmt_spec *spec, void *p) {
+    enum {
+        PTR_SIZE = sizeof(void *),
+        N_DIGITS = PTR_SIZE * 2,
+        PTR_STR_LEN = 2 + N_DIGITS,
+    };
 
     if (p == 0) {
-        return fmt_lit(stream, "(nil)", 5);
+        return fmt_str_core(stream, spec, "(nil)", 5);
     }
 
     char buf[PTR_STR_LEN];
@@ -348,14 +369,20 @@ static int fmt_ptr(struct file *stream, void *p) {
     }
     prepend(&num_str, 'x');
     prepend(&num_str, '0');
-    return fmt_lit(stream, num_str, buf + PTR_STR_LEN - num_str);
+    return fmt_str_core(stream, spec, num_str, buf + PTR_STR_LEN - num_str);
+}
+
+static int fmt_raw(struct file *stream, const char *s, unsigned long len) {
+    if (fwrite(s, 1, len, stream) < len)
+        return -1;
+    return len;
 }
 
 // must use va_list* because va_list is an aggregate
 int _vfprintf(struct file *stream, const char *fmt, va_list *ap) {
     int nw = 0;
     struct fmt_spec spec;
-    while ((fmt = p_fmt(fmt, &spec)) != 0) {
+    while ((fmt = p_fmt(fmt, ap, &spec)) != 0) {
         int nwp = 0;  // nw for this part of the format string
         if (spec.type == FMT_INT) {
             nwp = fmt_int(stream, &spec, (unsigned long)va_arg(*ap, int));
@@ -369,12 +396,12 @@ int _vfprintf(struct file *stream, const char *fmt, va_list *ap) {
             nwp = fmt_str(stream, &spec, va_arg(*ap, char *));
         } else if (spec.type == FMT_CHR) {
             nwp = fmt_chr(stream, &spec, (char)va_arg(*ap, int));
-        } else if (spec.type == FMT_LIT) {
-            nwp = fmt_lit(stream, spec.lit, spec.lit_len);
         } else if (spec.type == FMT_PTR) {
-            nwp = fmt_ptr(stream, va_arg(*ap, void *));
+            nwp = fmt_ptr(stream, &spec, va_arg(*ap, void *));
         } else if (spec.type == FMT_N) {
             *va_arg(*ap, int *) = nw;
+        } else if (spec.type == FMT_RAW) {
+            nwp = fmt_raw(stream, spec.raw.str, spec.raw.len);
         } else {
             // undefined behavior
         }
