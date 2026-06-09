@@ -213,6 +213,14 @@ def update_spec(
 # Test runner
 
 
+class SmolccCompileError(Exception):
+    result: subprocess.CompletedProcess[str]
+
+    def __init__(self, result: subprocess.CompletedProcess[str]) -> None:
+        super().__init__(f"compilation failed with exit code {result.returncode}")
+        self.result = result
+
+
 def print_text_block(label: str, text: str) -> None:
     print(f"{label}:")
     if text:
@@ -235,7 +243,7 @@ def print_text_diff(expected: str, actual: str, label: str) -> None:
 
 
 def default_exit_for(path: Path) -> int:
-    return 1 if "bad" in path.parts else 0
+    return 1 if "bad" in path.parts or "diag" in path.parts else 0
 
 
 async def live_output(proc: asyncio.subprocess.Process):
@@ -306,7 +314,7 @@ def run_file(
                 output_path = Path(temp_dir) / "a.out"
                 compile_result = run([CC, *CFLAGS, "-o", str(output_path), str(path)])
                 if compile_result.returncode != 0:
-                    return compile_result
+                    raise SmolccCompileError(compile_result)
                 return run([str(output_path), *args])
 
 
@@ -332,7 +340,14 @@ def run_case(path: Path, update: bool) -> bool:
     mode = spec.mode or SpecMode.COMPILE_ONLY
     args = shlex.split(spec.args) if spec.args else []
     src_path = spec.file or path
-    result = run_file(src_path, mode, args)
+    try:
+        result = run_file(src_path, mode, args)
+    except SmolccCompileError as exc:
+        print(f"{RED}FAIL{RESET}")
+        print()
+        print(f"Compilation failed with exit code {exc.result.returncode}")
+        print_text_block("stderr", exc.result.stderr)
+        return False
 
     if update:
         update_spec(path, spec, result)
@@ -357,6 +372,7 @@ def run_case(path: Path, update: bool) -> bool:
 
     if result.returncode != want_exit or stderr_failure or stdout_failure:
         print(f"{RED}FAIL{RESET}")
+        print()
 
         if result.returncode != want_exit:
             print(f"Expected exit code: {want_exit}")

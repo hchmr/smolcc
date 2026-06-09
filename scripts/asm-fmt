@@ -51,7 +51,11 @@ def format_lines(raw_lines: Iterable[str], fout: TextIO) -> None:
 parser = argparse.ArgumentParser(description="Format assembly file")
 parser.add_argument("input", nargs="*", help="input files (default: stdin)")
 parser.add_argument("-i", "--in-place", action="store_true", help="edit file in place")
-parser.add_argument("-o", "--output", help="output file (default: stdout, ignored if --in-place is used)")
+parser.add_argument(
+    "-o",
+    "--output",
+    help="output file (default: stdout, ignored if --in-place is used)",
+)
 
 args = parser.parse_args()
 
@@ -70,7 +74,11 @@ for input_file in args.input or [None]:
             inp = open(input_file, "r")
 
         # Buffer the entire file if we need to read and write the same file
-        if input_file and out_file and os.path.abspath(out_file) == os.path.abspath(input_file):
+        if (
+            input_file
+            and out_file
+            and os.path.abspath(out_file) == os.path.abspath(input_file)
+        ):
             lines = inp.readlines()
         else:
             lines = inp

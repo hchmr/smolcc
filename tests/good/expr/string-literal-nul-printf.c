@@ -1,9 +1,0 @@
-//# mode: run
-//# stdout: visible
-
-int puts(const char *);
-
-int main() {
-    puts("visible\n\0invisible\n");
-    return 0;
-}

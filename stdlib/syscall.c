@@ -12,7 +12,7 @@ enum {
 
 extern int errno;
 
-extern long _do_syscall(int num  , ...);
+extern long _do_syscall(int num, ...);
 
 static long set_errno(long res) {
     if (res < 0) {

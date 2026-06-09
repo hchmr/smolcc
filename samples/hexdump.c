@@ -225,7 +225,7 @@ void argparse(int argc, char **argv, struct conf *conf) {
     conf->limit = limit;
     conf->canonical = canonical;
     conf->nfiles = argc - optind;
-    conf->filenames = (const char**)argv + optind;
+    conf->filenames = (const char **)argv + optind;
 }
 
 //------------------------------------------------------------------------------
