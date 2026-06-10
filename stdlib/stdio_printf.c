@@ -389,7 +389,7 @@ int _vfprintf(struct file *stream, const char *fmt, va_list *ap) {
         } else if (spec.type == FMT_LONG) {
             nwp = fmt_int(stream, &spec, (unsigned long)va_arg(*ap, long));
         } else if (spec.type == FMT_UINT) {
-            nwp = fmt_int(stream, &spec, va_arg(*ap, unsigned long));
+            nwp = fmt_int(stream, &spec, (unsigned long)va_arg(*ap, unsigned int));
         } else if (spec.type == FMT_ULONG) {
             nwp = fmt_int(stream, &spec, va_arg(*ap, unsigned long));
         } else if (spec.type == FMT_STR) {
