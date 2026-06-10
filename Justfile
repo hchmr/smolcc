@@ -2,7 +2,7 @@ test *args:
     make test ARGS="{{args}}"
 
 bootstrap:
-    make bootstrap
+    make compiler
 
 format:
     #!/usr/bin/env bash

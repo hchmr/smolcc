@@ -16,7 +16,7 @@ STDLIB_MK = $(MK_DIR)/stdlib.mk
 
 ### Rules
 
-.PHONY: all clean stage0 stage1 stage2 bootstrap compiler stdlib test install
+.PHONY: all clean stage0 stage1 stage2 compiler stdlib test install
 
 all: compiler stdlib
 
@@ -38,9 +38,7 @@ stage2: stage1
 	diff -u $(BOOTSTRAP_DIR)/stage1/smolcc1.s $(BOOTSTRAP_DIR)/stage2/smolcc1.s
 	@echo "stage1 and stage2 outputs are identical\n"
 
-bootstrap: $(STAGE)
-
-compiler: bootstrap | $(DIST_DIR)
+compiler: $(STAGE) | $(DIST_DIR)
 	./scripts/install --component bin --stage $(STAGE) --prefix $(DIST_DIR)
 
 stdlib: compiler $(STDLIB_MK)

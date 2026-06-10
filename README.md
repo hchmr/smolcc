@@ -41,3 +41,20 @@ Dynamic memory is achieved with a bump allocator backed by a statically allocate
 A small companion library provides a minimal subset of the C standard library. It is not used in the compiler proper, but is used by the test suite. This standard library also serves as a place to experiment with low-level C library code in the same minimal environment as the compiler. The focus is not a full libc implementation, only a small set of useful functions, currently centered on parts of stdio.h, stdlib.h, and string.h.
 
 The core compiler program is not very easy to use on its own, since it reads source code from standard input and writes assembly to standard output. A simple compiler driver is included for convenience. It provides a few command-line options and handles the full compilation pipeline, including running the host toolchain’s assembler and linker to produce an executable. The driver also links in the standard library.
+
+## Development and Testing
+
+**Requirements**
+- an Arm64 Linux environment
+- GNU Make
+- GCC or Clang
+- optional: Python >= 3.12 to run the test suite
+- optional: errno from moreutils to generate strerror definition in stdlib
+
+#### Building
+
+`make all` (default) builds the compiler and the standard library.
+
+#### Testing
+
+`make test` runs the test suite using the built compiler. The test suite includes a variety of small C programs that are compiled with the smolcc driver and either executed or checked for expected compile-time errors.

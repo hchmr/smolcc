@@ -14,6 +14,7 @@ RUN apt-get update \
 # Project packages — only this layer rebuilds when you add/remove something
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        black \
         build-essential \
         clang-format \
         clangd \
