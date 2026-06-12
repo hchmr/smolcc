@@ -36,7 +36,7 @@ def format_line(raw_line: str) -> str | None:
         operands = parts[1] if len(parts) > 1 else ""
         line = f"    {mnemonic:<7} {operands}"
 
-        return f"{line:<40}{comment}".rstrip()
+        return f"{line:<39} {comment}".rstrip()
     else:
         return line
 
